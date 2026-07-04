@@ -13,6 +13,9 @@ jobs:
     permissions:
       contents: read
       deployments: write
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,15 +32,12 @@ jobs:
       - name: Build site
         run: npm run build
 
-      - name: Debug auth
-        run: |
-          echo "=== Testing Cloudflare API directly ==="
-          RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
-            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/pages/projects/pulsarguide" \
-            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
-            -H "Content-Type: application/json")
-          echo "$RESP"
-
       - name: Deploy to Cloudflare Pages
-        if: false  # temporarily disabled to test debug step first
-        run: echo "skipped"
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: pulsarguide
+          directory: dist
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          branch: master
