@@ -1,0 +1,95 @@
+---
+title: "【迁移】Ubuntu 16.10 配置 RTL8168 网卡驱动：从 r8169 切回 r8168"
+description: "旧博客 myinxd.github.io 时代的最后一篇，记录了一次真实的 Linux 网卡驱动排错过程。Ubuntu 自带的 r8169 与 Realtek RTL8111/8168 不兼容，需要手动安装 r8168 才能恢复稳定联网。"
+pubDate: 2019-07-27
+updatedDate: 2026-07-04
+tags: ["Linux", "踩坑记录", "旧文迁移"]
+draft: false
+---
+
+> 📜 **本文迁移自旧博客 [myinxd.github.io](https://github.com/myinxd/myinxd.github.io)**  
+> 原作者：Jason Ma，原文最后更新于 2019-07-28。  
+> 迁移时间：2026-07-04（作为新旧博客的衔接）。
+
+## 问题背景
+
+Ubuntu 16.10 配置无线网卡驱动的问题，同样适用 14.04 和 16.04。针对的设备是 `Realtek RTL8111/8168 PCI Express Gigabit Ethernet Controller`，表现为网络不稳定、经常掉线，且网速较慢，分析后认为是驱动不匹配。
+
+**Ubuntu 自带的驱动为 `r8169`，高于此类网卡，导致兼容性差，影响了网络连接效果。**
+
+解决方法如下，参考链接见文末。
+
+## 1. Check driver and device info
+
+查看系统网卡型号和对应的驱动，利用如下指令：
+
+```bash
+$ lspci -vv >> device.txt
+```
+
+打开 `device.txt`，找到网卡设备，样例如下。其中驱动部分显示为 `r8169`，与现有网卡不吻合：
+
+```
+03:00.0 Ethernet controller: Realtek Semiconductor Co., Ltd. RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller (rev 0b)
+        Subsystem: Acer Incorporated [ALI] RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller
+        Control: I/O+ Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR+ FastB2B- DisINTx+
+        Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+        Latency: 0, Cache Line Size: 64 bytes
+        Interrupt: pin A routed to IRQ 27
+        Region 0: I/O ports at d000 [size=256]
+        Region 2: Memory at f7104000 (64-bit, prefetchable) [size=4K]
+        Region 4: Memory at f7100000 (64-bit, prefetchable) [size=16K]
+        Capabilities: <access denied>
+        Kernel driver in use: r8169
+        Kernel modules: r8169
+```
+
+## 2. Download driver of r8168
+
+从 Realtek 官网下载 rtl8168 的[驱动](http://www.realtek.com.tw/downloads/downloadsView.aspx?Langid=1&PNid=13&PFid=5&Level=5&Conn=4&DownTypeID=3&GetDown=false#2)，需要根据 Linux 的内核版本进行选择，例如我的内核是 4.9.1，则选择 **4.7 以上**的驱动。
+
+> **更新 [2019-07-28]**：Realtek 的官方链接貌似打不开了，而且在我的系统更新到 18.04 以及内核更新以后出现了奇怪的编译错误（如下）。Google 以后发现是因为内核 4.15 以后，`setup_timer` 函数被更新为 `timer_setup`，因此出现了编译错误的问题。参考[建议](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=882838)，安装更新后的 `r8168.045.08-2` 驱动能够解决问题，该驱动的下载链接为[这里](https://launchpad.net/ubuntu/cosmic/+package/r8168-dkms)。
+
+```
+error: implicit declaration of function 'setup_timer'; did you mean 'sk_stop_timer'? [-Werror=implicit-function-declaration]
+         setup_timer(timer, rtl8168_esd_timer, (unsigned long)dev);
+         ^~~~~~~~~~~
+         sk_stop_timer
+```
+
+## 3. Install driver
+
+安装驱动，用如下指令，安装完成后要重启系统：
+
+```bash
+$ tar -xvf 0010-r8168-8.045.08.tar.bz2
+$ cd r8168-8.045.08
+$ sudo ./autorun.sh
+$ sudo reboot
+```
+
+重启以后，理论上网络连接恢复正常。重新查看系统设备信息，有如下结果，驱动已经更新为 `r8168`：
+
+```
+03:00.0 Ethernet controller: Realtek Semiconductor Co., Ltd. RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller (rev 0b)
+        Subsystem: Acer Incorporated [ALI] RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller
+        ...
+        Kernel driver in use: r8168
+        Kernel modules: r8168
+```
+
+## 写在迁移之后
+
+回头看这篇 2019 年的笔记，它本身没什么高深的技术含量，但记录了一种**我后来反复受益的工作习惯**：
+
+> 遇到一个环境配置问题 → 复现并定位到根因 → 记录完整解决路径 → 写下来。
+
+这个习惯在我做自动驾驶工程时帮了大忙——模型部署时 CUDA/cuDNN/TensorRT 的版本对齐、传感器时间戳同步的真值对不上、感知模型在某个新车型上掉点……几乎所有"环境问题"的解决路径都跟这次网卡排错是一样的：**先看现状，再换组件，最后留一份记录。**
+
+从 2019 到 2026，工具从 Octopress 换到了 Astro，主题从 Linux 驱动换到了自动驾驶，但"做工程"的内核没变过。
+
+Pulsar Guide 会继续记录这样的工程笔记。
+
+## Reference
+
+1. [Ubuntu 16.04 RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller "不能上网"](https://www.cnblogs.com/duwanjiang/p/5907634.html)
