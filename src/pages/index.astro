@@ -195,18 +195,48 @@ import Layout from '../layouts/Layout.astro';
   }
 
   @media (max-width: 640px) {
-    .features {
-      grid-template-columns: 1fr;
+    .hero {
+      padding: 2.5rem 0 2rem;
+    }
+    .hero-badge {
+      font-size: 0.75rem;
+      padding: 0.3rem 0.8rem;
+    }
+    .hero-title {
+      flex-direction: row;
+      justify-content: center;
+      align-items: baseline;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
     }
     .gradient-text {
-      font-size: 2.2rem;
+      font-size: 1.8rem;
     }
-    .hero {
-      padding: 3rem 0 2rem;
+    .hero-sub {
+      font-size: 1rem;
+    }
+    .hero-desc {
+      font-size: 0.95rem;
+      line-height: 1.7;
+      padding: 0 0.5rem;
     }
     .hero-actions {
       flex-direction: column;
-      align-items: center;
+      gap: 0.75rem;
+      padding: 0 1rem;
+    }
+    .btn {
+      width: 100%;
+      justify-content: center;
+      padding: 0.8rem 1.6rem;
+    }
+    .features {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      padding: 1rem 0 3rem;
+    }
+    .feature-card {
+      padding: 1.5rem;
     }
   }
 </style>

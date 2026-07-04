@@ -164,10 +164,33 @@ const { title, description } = Astro.props;
     font-size: 0.9rem;
     font-weight: 500;
     transition: color 0.2s;
+    white-space: nowrap;
   }
 
   .nav-links a:hover {
     color: var(--text-primary);
+  }
+
+  @media (max-width: 640px) {
+    .nav-container {
+      padding: 0 1rem;
+      height: 56px;
+    }
+    .nav-links {
+      gap: 1rem;
+    }
+    .nav-links a {
+      font-size: 0.8rem;
+    }
+    .logo-name {
+      font-size: 1rem;
+    }
+    .logo-sub {
+      font-size: 0.7rem;
+    }
+    main {
+      padding: 0 1rem;
+    }
   }
 
   main {
