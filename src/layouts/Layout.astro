@@ -1,0 +1,204 @@
+---
+const { title, description } = Astro.props;
+---
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate" type="application/rss+xml" title="Pulsar Guide" href="/rss.xml" />
+
+    <!-- KaTeX CSS for LaTeX rendering -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+      integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLhoTIBq4sF+NpDfUHSRhZ7L3I5f3W0uP1rC34z"
+      crossorigin="anonymous"
+    />
+
+    <!-- Google Fonts: Inter + JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+    <meta name="generator" content={Astro.generator} />
+    <title>{title ? `${title} | Pulsar Guide` : 'Pulsar Guide'}</title>
+    <meta name="description" content={description || 'A technical blog about autonomous driving, built by a radio astronomer turned self-driving engineer.'} />
+    <slot name="head" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="nav-container">
+        <a href="/" class="logo">
+          <svg class="pulsar-icon" viewBox="0 0 120 30" width="140" height="35">
+            <!-- Pulsar waveform → road line -->
+            <defs>
+              <linearGradient id="pulsarGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#7c3aed" />
+                <stop offset="50%" stop-color="#06b6d4" />
+                <stop offset="100%" stop-color="#10b981" />
+              </linearGradient>
+            </defs>
+            <polyline
+              points="2,20 8,20 12,15 16,5 20,25 24,10 28,22 32,12 36,20 42,20"
+              fill="none"
+              stroke="url(#pulsarGrad)"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <line x1="44" y1="20" x2="80" y2="20" stroke="#ffffff" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6" />
+            <text x="82" y="24" fill="#f8fafc" font-family="Inter, sans-serif" font-size="13" font-weight="700">Pulsar</text>
+            <text x="82" y="28" fill="#94a3b8" font-family="Inter, sans-serif" font-size="8" font-weight="500">GUIDE</text>
+          </svg>
+        </a>
+        <div class="nav-links">
+          <a href="/">首页</a>
+          <a href="/blog">文章</a>
+          <a href="/paper-notes">论文笔记</a>
+          <a href="/about">关于</a>
+        </div>
+      </nav>
+    </header>
+
+    <main>
+      <slot />
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-content">
+        <p>© {new Date().getFullYear()} Pulsar Guide · 星导</p>
+        <p class="footer-tagline">从脉冲星到自动驾驶 · 一个天文人的技术漫游</p>
+      </div>
+    </footer>
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    --bg-primary: #0a0a0f;
+    --bg-secondary: #13131a;
+    --bg-card: #1a1a25;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-1: #7c3aed;
+    --accent-2: #06b6d4;
+    --accent-3: #10b981;
+    --border: #1e293b;
+    --max-width: 800px;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  code, pre {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  a {
+    color: var(--accent-2);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  a:hover {
+    color: var(--accent-3);
+  }
+
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+    background: rgba(10, 10, 15, 0.85);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-container {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 0 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 2rem;
+  }
+
+  .nav-links a {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: color 0.2s;
+  }
+
+  .nav-links a:hover {
+    color: var(--text-primary);
+  }
+
+  main {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 0 1.5rem;
+    min-height: calc(100vh - 160px);
+  }
+
+  h1, h2, h3, h4 {
+    font-weight: 700;
+    line-height: 1.3;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+  }
+
+  h1 { font-size: 2.2rem; }
+  h2 { font-size: 1.6rem; }
+  h3 { font-size: 1.25rem; }
+
+  p {
+    margin-bottom: 1.2rem;
+  }
+
+  .site-footer {
+    margin-top: 5rem;
+    border-top: 1px solid var(--border);
+    padding: 2rem 1.5rem;
+  }
+
+  .footer-content {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+
+  .footer-tagline {
+    margin-top: 0.25rem;
+    font-style: italic;
+  }
+</style>

@@ -1,0 +1,102 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths() {
+  const notes = await getCollection('paperNotes');
+  return notes.map((note) => ({
+    params: { slug: note.slug },
+    props: { note },
+  }));
+}
+
+const { note } = Astro.props;
+const { Content } = await note.render();
+---
+
+<Layout title={note.data.title} description={note.data.description}>
+  <article class="post-content">
+    <header class="post-header">
+      <div class="post-meta">
+        <time datetime={note.data.pubDate.toISOString()}>
+          {note.data.pubDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })}
+        </time>
+        <div class="post-tags">
+          {note.data.tags.map((tag) => <span class="tag">{tag}</span>)}
+        </div>
+      </div>
+      {note.data.paperUrl && (
+        <a href={note.data.paperUrl} target="_blank" rel="noopener noreferrer" class="paper-link">
+          🔗 查看原论文 ↗
+        </a>
+      )}
+      <h1>{note.data.title}</h1>
+      <p class="post-desc">{note.data.description}</p>
+    </header>
+
+    <div class="content-body">
+      <Content />
+    </div>
+  </article>
+</Layout>
+
+<style>
+  .post-header {
+    padding: 2rem 0 1.5rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2rem;
+  }
+
+  .post-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+  }
+
+  .post-tags {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .tag {
+    background: rgba(124, 58, 237, 0.1);
+    border: 1px solid rgba(124, 58, 237, 0.2);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: var(--accent-1);
+  }
+
+  .paper-link {
+    display: inline-block;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    padding: 0.3rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    color: var(--accent-3);
+    margin-bottom: 1rem;
+  }
+  .paper-link:hover {
+    background: rgba(16, 185, 129, 0.2);
+  }
+
+  .post-header h1 {
+    margin: 0 0 0.5rem;
+    font-size: 2rem;
+  }
+
+  .post-desc {
+    color: var(--text-secondary);
+    font-size: 1rem;
+    margin: 0;
+  }
+
+  .content-body {
+    padding-bottom: 4rem;
+  }
+</style>

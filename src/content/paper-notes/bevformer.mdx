@@ -1,0 +1,89 @@
+---
+title: "BEVFormer: 从多视角图像到鸟瞰特征的学习范式"
+description: "BEVFormer 论文精读：利用时空注意力机制统一多视角特征和时序信息，在 nuScenes 上实现 SOTA 性能"
+pubDate: 2026-06-25
+paperUrl: "https://arxiv.org/abs/2203.17270"
+tags: ["BEV", "Attention", "Perception", "Transformer"]
+draft: false
+---
+
+## 论文基本信息
+
+- **标题**: BEVFormer: Learning Bird's-Eye-View Representation from Multi-Camera Images via Spatiotemporal Transformers
+- **会议**: ECCV 2022
+- **作者**: Zhiqi Li, Wenhai Wang, et al.
+- **核心贡献**: 提出一种纯视觉的 BEV 感知范式，通过时空 Transformer 将多视角相机图像特征统一到 BEV 空间
+
+## 背景与动机
+
+自动驾驶感知中，**鸟瞰视角表示**（BEV Representation）是连接感知、预测与规划的天然统一表征。然而纯视觉 BEV 生成面临两大挑战：
+
+1. **透视到俯视的几何变换**: 如何将多相机图像中的像素映射到统一的地平面？
+2. **时序信息的有效利用**: 如何用过去帧的信息增强当前感知？
+
+之前的方案（如 LSS）依赖显式的深度估计，而 BEVFormer 选择**通过注意力机制隐式学习**这种映射。
+
+## 方法概述
+
+$$
+
+\text{BEV查询} \in \mathbb{R}^{H \times W \times C}
+
+$$
+
+BEVFormer 的核心是一个包含 $H \times W$ 个可学习查询网格的 Transformer 架构。每个查询对应 BEV 空间中的一个位置网格。
+
+### Temporal Self-Attention
+
+$$
+
+\text{TSA}(Q_p, \{Q_{t-1}, Q_t\}) = \text{DeformAttn}(Q_p, \text{Align}(Q_{t-1}), ...)
+
+$$
+
+### Spatial Cross-Attention
+
+$$
+
+\text{SCA}(Q_p, I_t) = \frac{1}{|\mathcal{V}|} \sum_{i \in \mathcal{V}} \text{DeformAttn}(Q_p, \text{Proj}(p, i), I_t^{(i)})
+
+$$
+
+其中 $\mathcal{V}$ 是能"看到"查询点 $p$ 的相机集合，$\text{Proj}(p, i)$ 将 BEV 位置投影到第 $i$ 个相机的图像平面作为参考点。
+
+## 创新点
+
+1. **时空统一设计**: 不像之前的方法分别处理时间和空间维度，BEVFormer 将两者用一个统一的注意力机制搞定
+2. **可变形注意力的高效应用**: 每个查询只采样 4 个参考点 × 2 层 × 6 个相机 = 48 个点/帧，计算量远小于全局注意力
+3. **循环时序融合**: 上一帧的 BEV 特征作为 Temporal Self-Attention 的输入，实现隐式的时序传播
+
+## 实验结果
+
+$$
+
+\text{nuScenes Detection NDS: } 51.7\% \quad (\text{纯视觉, Val set})
+
+$$
+
+$$
+\text{nuScenes Segmentation mIoU: } 37.5\%
+$$
+
+优于所有之前的基于相机的 BEV 方法。推理速度在 A100 上约为 **2.5 FPS**（使用 ResNet-50 作为 Image Backbone）。
+
+## 思考
+
+**Pros**:
+- BEV 空间中的查询机制非常优雅，避免了显式的深度估计
+- 时序融合设计轻量且有效
+
+**Cons**:
+- 推理速度慢，远超不上市车实时需求
+- BEV 查询分辨率受限于网格大小，远处目标的分辨率不足
+- 在大曲率弯道或剧烈颠簸场景，投影对齐可能失效
+
+## 相关资源
+
+- [论文 arxiv](https://arxiv.org/abs/2203.17270)
+- [官方代码](https://github.com/fundamentalvision/BEVFormer)
+- [MMDetection3D 实现](https://github.com/open-mmlab/mmdetection3d)

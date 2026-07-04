@@ -1,0 +1,65 @@
+---
+title: "网站上线：Pulsar Guide 的技术架构与愿景"
+description: "从射电望远镜到自动驾驶，这个博客的诞生背景、技术选型与未来规划"
+pubDate: 2026-07-04
+tags: ["博客", "杂谈"]
+draft: false
+---
+
+## 为什么叫 Pulsar Guide？
+
+Pulsar（脉冲星）是宇宙中最精确的天体时钟，它向太空发射着规律而稳定的信号。
+Guide（导航/引导）又恰好是自动驾驶的核心任务之一。
+
+"Pulsar Guide" 这个双关语，恰好串起了我职业生涯的两段经历——**射电天文学**与**自动驾驶**。
+
+## 网站架构
+
+本博客采用以下技术栈构建：
+
+- **框架**：[Astro](https://astro.build/) v5 — 静态站点生成器，原生内容集合驱动
+- **内容格式**：MDX — 支持 Markdown 中嵌入 React 组件
+- **公式渲染**：KaTeX — 通过 `remark-math` 和 `rehype-katex` 插件支持 $\LaTeX$ 公式
+- **代码高亮**：Shiki — 内置 `one-dark-pro` 主题
+- **部署**：Cloudflare Pages — 全球 CDN，自动 HTTPS
+- **域名**：pulsarguide.com — 全新注册
+
+## 内容规划
+
+博客主要分为三大板块：
+
+### 1. 论文笔记
+
+自动驾驶领域的论文精读，包括但不限于：
+
+- **BEV Perception**：LSS、PETR、BEVFormer 系列
+- **Occupancy Network**：OccNet、SurroundOcc 等
+- **Motion Prediction**：Wayformer、Motion Transformer
+- **Planning & Decision**：PnP、VAD 等端到端方案
+
+### 2. 工程实践
+
+工作中积累的实战经验：
+
+- 深度学习模型部署与推理优化
+- 数据集构建与标注策略
+- 仿真测试与实车验证流程
+- 技术栈选型与架构设计
+
+### 3. 职业思考
+
+从天文到自动驾驶的技术转型心得。
+
+## 关于变现的初步思路
+
+博客未来计划从以下方向探索变现：
+
+1. **知识付费专栏** — 面向进阶读者的自动驾驶算法系列课程
+2. **技术咨询** — 对自动驾驶领域的工程技术提供一对一的咨询服务
+3. **会员内容** — 高质量论文解读和深度分析
+
+不过这些都在计划阶段，目前的核心任务还是——**写出好内容**。
+
+---
+
+欢迎关注，一起在自动驾驶的世界里找方向 🚗✨

@@ -1,0 +1,79 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="关于">
+  <section class="about-page">
+    <h1>👋 关于我</h1>
+
+    <div class="about-card">
+      <p>
+        你好！我是 Pulsar Guide 的作者，一位从射电天文学跨界到自动驾驶领域的工程师。
+      </p>
+
+      <h2>🔭 从脉冲星到自动驾驶</h2>
+      <p>
+        曾经我是一个射电天文学者，每天面对的是来自深空的毫秒脉冲星信号。
+        现在我用同样的信号处理思维，解决自动驾驶中的感知与决策问题。
+      </p>
+      <p>
+        这个博客记录了我从天文到驾驶的技术旅程——论文笔记、工程实践和思考感悟。
+      </p>
+
+      <h2>📌 博客内容方向</h2>
+      <ul>
+        <li><strong>论文精读</strong>：自动驾驶领域重点论文的逐篇分析，包括动机、方法、实验与思考</li>
+        <li><strong>工程实践</strong>：工作中学到的实际落地经验，踩过的坑和总结的方法论</li>
+        <li><strong>算法解读</strong>：行为预测、轨迹规划、决策优化等核心算法深入解析</li>
+        <li><strong>职业思考</strong>：技术人的成长路径、跨界转型的经验分享</li>
+      </ul>
+
+      <h2>🌐 联系方式</h2>
+      <p>
+        如果你对内容有想法，或者有合作需求，欢迎通过以下方式联系：
+      </p>
+      <ul>
+        <li>GitHub: <a href="https://github.com/myinxd" target="_blank">myinxd</a></li>
+        <li>域名: <a href="https://pulsarguide.com">pulsarguide.com</a></li>
+      </ul>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .about-page {
+    padding: 3rem 0;
+  }
+
+  .about-page h1 {
+    margin: 0 0 2rem;
+  }
+
+  .about-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2.5rem;
+    line-height: 1.8;
+  }
+
+  .about-card h2 {
+    font-size: 1.2rem;
+    margin-top: 2rem;
+    margin-bottom: 0.8rem;
+  }
+
+  .about-card ul {
+    padding-left: 1.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .about-card li {
+    color: var(--text-secondary);
+    margin-bottom: 0.4rem;
+  }
+
+  .about-card li strong {
+    color: var(--text-primary);
+  }
+</style>

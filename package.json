@@ -1,0 +1,19 @@
+{
+  "name": "pulsarguide",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "astro": "^7.0.6",
+    "@astrojs/mdx": "^7.0.2",
+    "@astrojs/rss": "^4.0.11",
+    "@astrojs/sitemap": "^3.3.1",
+    "remark-math": "^6.0.0",
+    "rehype-katex": "^7.0.1"
+  }
+}
