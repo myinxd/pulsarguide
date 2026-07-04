@@ -18,7 +18,7 @@ export default defineConfig({
       rehypePlugins: [rehypeKatex],
     }),
     shikiConfig: {
-      theme: 'one-dark-pro',
+      theme: 'github-light',
       wrap: true,
     },
   },
