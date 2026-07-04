@@ -29,8 +29,15 @@ jobs:
       - name: Build site
         run: npm run build
 
+      - name: Debug auth
+        run: |
+          echo "=== Testing Cloudflare API directly ==="
+          RESP=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/pages/projects/pulsarguide" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json")
+          echo "$RESP"
+
       - name: Deploy to Cloudflare Pages
-        run: npx wrangler@3 pages deploy dist --project-name=pulsarguide
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        if: false  # temporarily disabled to test debug step first
+        run: echo "skipped"
