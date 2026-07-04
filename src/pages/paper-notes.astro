@@ -18,7 +18,7 @@ const notes = (await getCollection('paperNotes'))
       notes.length > 0 ? (
         notes.map((note) => (
           <article class="post-card">
-            <a href={`/paper-notes/notes/${note.slug}`} class="post-link">
+            <a href={`/paper-notes/notes/${note.id}`} class="post-link">
               <div class="post-meta">
                 <time datetime={note.data.pubDate.toISOString()}>
                   {note.data.pubDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })}
