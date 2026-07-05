@@ -1,0 +1,528 @@
+---
+title: "读懂 Self-Attention 和 Cross-Attention：以自动驾驶导航选道为例"
+description: "从脉冲星信号去噪到自动驾驶的导航选道，Self-Attention 和 Cross-Attention 无处不在。本文用直觉+公式+代码+实战案例，帮你彻底理解这两种注意力机制的本质区别。"
+pubDate: 2026-07-05
+tags:
+  - Transformer
+  - Attention Mechanism
+  - Autonomous Driving
+  - Motion Planning
+  - Tutorial
+---
+
+
+# 读懂 Self-Attention 和 Cross-Attention
+
+> 从脉冲星信号去噪到自动驾驶的导航选道，Attention 机制无处不在。
+
+## 1. 引子：注意力是个什么东西？
+
+先说个天文故事。
+
+脉冲星（Pulsar）是高速旋转的中子星，它发出的无线电信号像灯塔一样周期性扫过地球。但信号里混着大量星际噪声——要从噪声里找出那个微弱的周期性脉冲，天文学家做的事情本质上就是 **Attention**：
+
+- 给每个时间采样点一个"重要性权重"
+- 周期性的信号权重高，随机噪声权重低
+- 加权求和 → 得到干净的脉冲轮廓
+
+这不就是 Attention 的本质吗？**对输入进行加权求和，重要的多关注，不重要的少关注**。
+
+Transformer 里的 Attention 也是这个逻辑，只不过它更系统、更可学习。今天我们就聊聊 Transformer 里最常用的两种注意力：**Self-Attention** 和 **Cross-Attention**。
+
+---
+
+## 2. Self-Attention：自我反思的艺术
+
+### 2.1 核心思想
+
+Self-Attention 的 Q、K、V **都来自同一个序列**。
+
+一句话解释：**序列里的每个元素，都要跟序列里所有其他元素"打个招呼"，看看彼此之间有什么关系**。
+
+比如句子 "The cat sat on the mat"：
+- 处理 "cat" 的时候，模型会去看 "The"、"sat"、"on"、"the"、"mat"
+- 发现 "sat"（坐）跟 "cat" 关系很密切 → 权重高
+- 发现 "mat"（垫子）跟 "cat" 也有关系 → 权重高
+- 加权求和 → 得到 "cat" 的新表示（包含了上下文信息）
+
+### 2.2 公式
+
+```
+Q = X @ Wq   # [N, D]
+K = X @ Wk   # [N, D]
+V = X @ Wv   # [N, D]
+
+Attention(Q, K, V) = softmax(Q @ K.T / sqrt(d_k)) @ V
+```
+
+其中：
+- `X` 是输入序列 `[N, D]`（N 个 token，每个 D 维）
+- `Q @ K.T` 计算的是：**每个 query 跟每个 key 的相似度**
+- `softmax` 把相似度变成权重（和为 1）
+- 用权重对 V 加权求和 → 输出
+
+### 2.3 脉冲星例子：Self-Attention 去噪
+
+把脉冲星信号切成时间窗口，每个窗口是一个 token：
+
+```
+输入 X: [x1, x2, x3, ..., xT]   # T 个时间窗口
+```
+
+Self-Attention 让每个窗口 `xi` 关注其他所有窗口：
+- 如果 `xj` 跟 `xi` 在同一个周期相位 → 权重高
+- 如果 `xj` 是随机噪声 → 权重低
+
+输出：每个窗口的新表示，噪声被抑制，周期性信号被增强。
+
+### 2.4 代码：Self-Attention 最小实现
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SelfAttention(nn.Module):
+    def __init__(self, dim, heads=8):
+        super().__init__()
+        self.dim = dim
+        self.heads = heads
+        self.scale = (dim // heads) ** -0.5
+        
+        self.qkv = nn.Linear(dim, dim * 3, bias=False)
+        
+    def forward(self, x):
+        # x: [batch, n, dim]
+        B, N, D = x.shape
+        head_dim = D // self.heads
+        
+        # 生成 Q, K, V
+        qkv = self.qkv(x)  # [B, N, 3*D]
+        q, k, v = qkv.chunk(3, dim=-1)  # 每个 [B, N, D]
+        
+        # 多头拆分
+        q = q.view(B, N, self.heads, head_dim).transpose(1, 2)  # [B, H, N, head_dim]
+        k = k.view(B, N, self.heads, head_dim).transpose(1, 2)
+        v = v.view(B, N, self.heads, head_dim).transpose(1, 2)
+        
+        # Attention
+        attn = (q @ k.transpose(-2, -1)) * self.scale  # [B, H, N, N]
+        attn = F.softmax(attn, dim=-1)
+        
+        out = (attn @ v).transpose(1, 2).reshape(B, N, D)
+        return out, attn
+
+# 测试：模拟脉冲星信号去噪
+if __name__ == "__main__":
+    B, N, D = 1, 100, 64  # 100 个时间窗口，每个 64 维
+    x = torch.randn(B, N, D)
+    
+    attn = SelfAttention(D, heads=4)
+    out, weights = attn(x)
+    
+    print(f"输入形状: {x.shape}")
+    print(f"输出形状: {out.shape}")
+    print(f"Attention 权重形状: {weights.shape}")  # [B, H, N, N]
+    print(f"权重和 (应为1): {weights[0, 0, 0].sum():.2f}")
+```
+
+---
+
+## 3. Cross-Attention：跨序列的对话
+
+### 3.1 核心思想
+
+Cross-Attention 的 Q **来自一个序列**，K 和 V **来自另一个序列**。
+
+一句话解释：**让序列 A 的每个元素，去"查询"序列 B 里哪些元素跟自己相关**。
+
+比如机器翻译 "I love cats" → "我喜欢猫"：
+- Encoder 输出（英文）是序列 B
+- Decoder 的每个位置（中文）是序列 A
+- Decoder 用 Cross-Attention 让"喜"去关注英文里的 "love"
+- 让"猫"去关注英文里的 "cats"
+
+### 3.2 公式
+
+```
+Q = X1 @ Wq   # X1 来自序列 A, [N1, D]
+K = X2 @ Wk   # X2 来自序列 B, [N2, D]
+V = X2 @ Wv   # X2 来自序列 B, [N2, D]
+
+CrossAttention(Q, K, V) = softmax(Q @ K.T / sqrt(d_k)) @ V
+```
+
+**关键区别**：
+- Self-Attention: Q, K, V 都来自 X（同一个序列）
+- Cross-Attention: Q 来自 X1，K, V 来自 X2（两个序列）
+
+公式长得一样，但 **Q 的来源不同**，这就是本质区别。
+
+### 3.3 代码：Cross-Attention 最小实现
+
+```python
+class CrossAttention(nn.Module):
+    def __init__(self, dim, heads=8):
+        super().__init__()
+        self.dim = dim
+        self.heads = heads
+        self.scale = (dim // heads) ** -0.5
+        
+        self.q = nn.Linear(dim, dim, bias=False)
+        self.kv = nn.Linear(dim, dim * 2, bias=False)
+        
+    def forward(self, x1, x2):
+        # x1: [B, N1, D] - Query 来源
+        # x2: [B, N2, D] - Key/Value 来源
+        B, N1, D = x1.shape
+        N2 = x2.shape[1]
+        head_dim = D // self.heads
+        
+        q = self.q(x1)  # [B, N1, D]
+        kv = self.kv(x2)  # [B, N2, 2*D]
+        k, v = kv.chunk(2, dim=-1)  # 每个 [B, N2, D]
+        
+        # 多头拆分
+        q = q.view(B, N1, self.heads, head_dim).transpose(1, 2)  # [B, H, N1, head_dim]
+        k = k.view(B, N2, self.heads, head_dim).transpose(1, 2)  # [B, H, N2, head_dim]
+        v = v.view(B, N2, self.heads, head_dim).transpose(1, 2)
+        
+        # Cross-Attention: Q 来自 x1, K/V 来自 x2
+        attn = (q @ k.transpose(-2, -1)) * self.scale  # [B, H, N1, N2]
+        attn = F.softmax(attn, dim=-1)
+        
+        out = (attn @ v).transpose(1, 2).reshape(B, N1, D)
+        return out, attn
+
+# 测试：模拟两个序列的交互
+if __name__ == "__main__":
+    B, N1, N2, D = 1, 10, 20, 64  # 序列1有10个token，序列2有20个token
+    x1 = torch.randn(B, N1, D)  # 序列 A (Query)
+    x2 = torch.randn(B, N2, D)  # 序列 B (Key/Value)
+    
+    cross_attn = CrossAttention(D, heads=4)
+    out, weights = cross_attn(x1, x2)
+    
+    print(f"Query 序列形状: {x1.shape}")
+    print(f"Key/Value 序列形状: {x2.shape}")
+    print(f"输出形状: {out.shape}")  # [B, N1, D]
+    print(f"Cross-Attention 权重形状: {weights.shape}")  # [B, H, N1, N2]
+    print(f"权重和 (应为1): {weights[0, 0, 0].sum():.2f}")
+```
+
+---
+
+## 4. 实战案例：自动驾驶中的导航选道
+
+这部分是重点！我们看看 Self-Attention 和 Cross-Attention 在自动驾驶里怎么用。
+
+### 4.1 问题定义：导航选道是什么？
+
+自动驾驶的 **规划模块（Planning）** 要做三件事：
+
+1. **行为决策**（Behavioral Decision）：要不要换道？加速还是减速？
+2. **运动预测**（Motion Prediction）：周围车会怎么走？
+3. **轨迹规划**（Motion Planning）：我应该走哪条曲线？
+
+这三个任务里，Attention 机制都大有用处。
+
+---
+
+### 4.2 案例 1：轨迹预测（Motion Prediction）— VectorNet
+
+**论文**：*VectorNet: Encoding HD Maps and Agent Dynamics from Vectorized Representation* (Waymo, CVPR 2020)
+
+#### 问题
+
+要预测目标车辆未来 3 秒的轨迹，需要同时考虑：
+- **Agent 轨迹**：目标车过去 2 秒的位置、速度、朝向（时间序列）
+- **地图信息**：车道线、路口、红绿灯（空间结构）
+
+#### VectorNet 的做法
+
+**Step 1**: 用 Self-Attention 分别处理两种输入
+- Agent 轨迹 → Self-Attention → 得到 Agent 的上下文特征
+- 地图 polyline → Self-Attention → 得到地图的上下文特征
+
+**Step 2**: 用 Cross-Attention 融合两者
+```
+Q = Agent特征  [T, D]   # Query 来自 Agent
+K = 地图特征    [N, D]   # Key 来自地图
+V = 地图特征    [N, D]   # Value 来自地图
+```
+
+**直觉**：
+- Agent 在每个时间步 `t`，通过 Cross-Attention "看"地图里哪些车道跟自己相关
+- 如果 Agent 在车道中心 → 关注当前车道
+- 如果 Agent 靠近路口 → 关注多条可能的前方车道
+
+**输出**：每个时间步的特征都融合了地图上下文 → 更准确的轨迹预测
+
+#### 代码简化版
+
+```python
+class TrajectoryPredictionWithMap(nn.Module):
+    def __init__(self, dim=128, heads=4):
+        super().__init__()
+        self.agent_self_attn = SelfAttention(dim, heads)
+        self.map_self_attn = SelfAttention(dim, heads)
+        self.cross_attn = CrossAttention(dim, heads)
+        
+    def forward(self, agent_traj, map_polylines):
+        # agent_traj: [B, T, D] - 目标车过去 T 个时间步
+        # map_polylines: [B, N, D] - N 个地图 polyline
+        
+        # Step 1: Self-Attention
+        agent_ctx, _ = self.agent_self_attn(agent_traj)  # [B, T, D]
+        map_ctx, _ = self.map_self_attn(map_polylines)    # [B, N, D]
+        
+        # Step 2: Cross-Attention (Agent 关注地图)
+        fused, attn_weights = self.cross_attn(agent_ctx, map_ctx)  # [B, T, D]
+        
+        # 输出：融合了地图信息的 Agent 特征
+        return fused, attn_weights
+
+# 测试
+if __name__ == "__main__":
+    B, T, N, D = 1, 20, 50, 128  # 20个时间步，50个地图polyline
+    agent_traj = torch.randn(B, T, D)
+    map_polylines = torch.randn(B, N, D)
+    
+    model = TrajectoryPredictionWithMap(D)
+    fused, weights = model(agent_traj, map_polylines)
+    
+    print(f"融合后特征形状: {fused.shape}")  # [1, 20, 128]
+    print(f"Attention 权重形状: {weights.shape}")  # [1, 4, 20, 50]
+```
+
+---
+
+### 4.3 案例 2：车辆交互建模 — HiVT / QCNet
+
+**论文**：
+- HiVT: *Heterogeneous Multi-Agent Tracking with Hierarchical Vector Transformer* (ICLR 2022)
+- QCNet: *Query-Centric Network for Trajectory Prediction* (ICRA 2023)
+
+#### 问题
+
+路口有 10 辆车，要预测其中一辆车（ego）的未来轨迹。关键是：**哪些车会影响 ego？**
+
+#### 做法：用 Cross-Attention 建模车辆交互
+
+```
+Q = ego车辆的特征    [1, D]
+K = 周围车辆的特征    [9, D]
+V = 周围车辆的特征    [9, D]
+```
+
+Attention 权重高 = 这辆车对 ego 影响大
+- 比如旁边车道有车要并入 → 权重高
+- 比如远处直行的车 → 权重低
+
+**而且可以双向**：
+- ego → neighbors: ego 关注谁（我要注意谁）
+- neighbors → ego: 别人怎么看 ego（社会交互）
+
+#### 代码简化版
+
+```python
+class VehicleInteraction(nn.Module):
+    def __init__(self, dim=128, heads=4):
+        super().__init__()
+        self.cross_attn = CrossAttention(dim, heads)
+        
+    def forward(self, ego_feat, neighbor_feats):
+        # ego_feat: [B, 1, D] - ego 车辆特征
+        # neighbor_feats: [B, N, D] - N 个周围车辆特征
+        
+        # ego 关注周围车辆
+        ego_updated, attn_weights = self.cross_attn(ego_feat, neighbor_feats)
+        
+        return ego_updated, attn_weights
+
+# 测试
+if __name__ == "__main__":
+    B, N, D = 1, 9, 128  # 9 辆周围车
+    ego_feat = torch.randn(B, 1, D)
+    neighbor_feats = torch.randn(B, N, D)
+    
+    model = VehicleInteraction(D)
+    ego_updated, weights = model(ego_feat, neighbor_feats)
+    
+    print(f"ego 更新后特征: {ego_updated.shape}")  # [1, 1, 128]
+    print(f"交互权重: {weights.shape}")  # [1, 4, 1, 9]
+    print(f"最影响的车辆 (权重最大): {weights[0, 0, 0].argmax().item()}")
+```
+
+---
+
+### 4.4 案例 3：端到端规划 — 导航指令关注感知特征
+
+**公司**：Tesla, Wayve 等（端到端自动驾驶方案）
+
+#### 问题
+
+输入：
+- 感知输出：周围车辆、行人、车道线（图像或 BEV 特征）
+- 导航指令："前方 500m 右转"
+
+输出：车辆应该走哪条车道、怎么换道
+
+#### 做法：用 Cross-Attention 让导航指令"查询"感知特征
+
+```
+Q = 导航指令的 embedding  ["前方", "500m", "右转"]
+K = 感知特征的序列          [H*W, D] 或 [N, D]
+V = 感知特征的序列
+```
+
+**直觉**：
+- "右转"这个 token，通过 Cross-Attention 去关注 BEV 特征里的"右侧车道线"
+- "前方 500m"这个 token，去关注远处的车道
+- 让模型把**语言指令**和**视觉特征**对齐起来
+
+#### 这不是 CLIP 吗？
+
+对！CLIP 就是用了 Cross-Attention 把文本和图像对齐。自动驾驶里的端到端方案也是类似逻辑。
+
+---
+
+## 5. 什么时候用 Self，什么时候用 Cross？
+
+| 场景 | 推荐 | 原因 |
+|------|------|------|
+| 序列内部依赖（语言、信号） | **Self-Attention** | 同质输入，双向上下文 |
+| 多模态融合（图像+文本） | **Cross-Attention** | 异质特征对齐 |
+| 地图 + 轨迹预测 | **Cross-Attention** | 空间 + 时间特征融合 |
+| 车辆交互建模 | **Cross-Attention** | agent-to-agent |
+| 编码器（上下文理解） | **Self-Attention** | 全局依赖 |
+| 解码器（生成） | **Masked Self + Cross** | 因果性 + 信息源 |
+
+**一句话总结**：
+- **Self-Attention**："我自己跟自己比"（序列内部关系）
+- **Cross-Attention**："我去查别人的"（跨序列关系）
+
+---
+
+## 6. 完整代码：统一实现 Self 和 Cross
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Attention(nn.Module):
+    """
+    统一实现 Self-Attention 和 Cross-Attention
+    通过 mode 参数切换
+    """
+    def __init__(self, dim, heads=8, mode='self'):
+        super().__init__()
+        assert mode in ['self', 'cross']
+        self.dim = dim
+        self.heads = heads
+        self.mode = mode
+        self.scale = (dim // heads) ** -0.5
+        
+        if mode == 'self':
+            self.qkv = nn.Linear(dim, dim * 3, bias=False)
+        else:  # cross
+            self.q = nn.Linear(dim, dim, bias=False)
+            self.kv = nn.Linear(dim, dim * 2, bias=False)
+        
+    def forward(self, x1, x2=None):
+        """
+        Self-Attention: forward(x1)
+        Cross-Attention: forward(x1, x2)  # x1 是 Query, x2 是 Key/Value
+        """
+        if self.mode == 'self':
+            return self._self_attention(x1)
+        else:
+            return self._cross_attention(x1, x2)
+        
+    def _self_attention(self, x):
+        B, N, D = x.shape
+        head_dim = D // self.heads
+        
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, dim=-1)
+        
+        q = q.view(B, N, self.heads, head_dim).transpose(1, 2)
+        k = k.view(B, N, self.heads, head_dim).transpose(1, 2)
+        v = v.view(B, N, self.heads, head_dim).transpose(1, 2)
+        
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = F.softmax(attn, dim=-1)
+        
+        out = (attn @ v).transpose(1, 2).reshape(B, N, D)
+        return out, attn
+    
+    def _cross_attention(self, x1, x2):
+        B, N1, D = x1.shape
+        N2 = x2.shape[1]
+        head_dim = D // self.heads
+        
+        q = self.q(x1)
+        kv = self.kv(x2)
+        k, v = kv.chunk(2, dim=-1)
+        
+        q = q.view(B, N1, self.heads, head_dim).transpose(1, 2)
+        k = k.view(B, N2, self.heads, head_dim).transpose(1, 2)
+        v = v.view(B, N2, self.heads, head_dim).transpose(1, 2)
+        
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = F.softmax(attn, dim=-1)
+        
+        out = (attn @ v).transpose(1, 2).reshape(B, N1, D)
+        return out, attn
+
+# 测试
+if __name__ == "__main__":
+    D = 64
+    
+    # Self-Attention 测试
+    self_attn = Attention(D, mode='self')
+    x = torch.randn(1, 10, D)
+    out, attn = self_attn(x)
+    print(f"[Self-Attention] 输入: {x.shape} -> 输出: {out.shape}")
+    
+    # Cross-Attention 测试
+    cross_attn = Attention(D, mode='cross')
+    x1 = torch.randn(1, 5, D)  # Query 序列
+    x2 = torch.randn(1, 8, D)  # Key/Value 序列
+    out, attn = cross_attn(x1, x2)
+    print(f"[Cross-Attention] Query: {x1.shape}, KV: {x2.shape} -> 输出: {out.shape}")
+```
+
+---
+
+## 7. 总结
+
+从脉冲星信号去噪到自动驾驶的导航选道，Self-Attention 和 Cross-Attention 的本质都是 **加权求和**，只不过：
+
+- **Self-Attention**：Q/K/V 同源 → 序列内部建模
+- **Cross-Attention**：Q 异源 → 跨序列交互
+
+在自动驾驶里：
+- **Self-Attention** 用来理解单车轨迹、地图结构
+- **Cross-Attention** 用来融合多模态信息、建模车辆交互、对齐导航指令与感知特征
+
+**哲学层面**：
+- Self = 内观（了解自己）
+- Cross = 外交（理解他人/环境）
+
+好的模型知道什么时候该内观，什么时候该外交。
+
+---
+
+## 参考资料
+
+1. Vaswani et al., *Attention is All You Need*, NeurIPS 2017
+2. Google Waymo, *VectorNet: Encoding HD Maps and Agent Dynamics*, CVPR 2020
+3. HiVT, *Heterogeneous Multi-Agent Tracking with Hierarchical Vector Transformer*, ICLR 2022
+4. QCNet, *Query-Centric Network for Trajectory Prediction*, ICRA 2023
+5. 李宏毅, *Transformer 和 Attention 机制*, 台湾大学课程
+
+---
+
+**如果你觉得这篇文章有帮助，欢迎关注 [Pulsar Guide](/) 获取更多自动驾驶技术笔记！**
