@@ -26,4 +26,16 @@ const paperNotes = defineCollection({
   }),
 });
 
-export const collections = { blog, paperNotes };
+const agent = defineCollection({
+  loader: glob({ pattern: "**/*.{md,mdx}", base: "src/content/agent" }),
+  schema: z.object({
+    title: z.string(),
+    description: z.string(),
+    pubDate: z.date(),
+    updatedDate: z.date().optional(),
+    tags: z.array(z.string()).default([]),
+    draft: z.boolean().default(false),
+  }),
+});
+
+export const collections = { blog, paperNotes, agent };
