@@ -1,0 +1,240 @@
+---
+title: "国内四大模型平台横向对比：豆包/Kimi/DeepSeek/千问"
+description: "从入口地址、客户端覆盖、API 获取方式、编程助手到 token 定价——一份实用的国内大模型平台选型参考。"
+pubDate: 2026-08-02
+tags:
+  - Agent
+  - LLM
+  - 工具对比
+  - API
+---
+
+# 国内四大模型平台横向对比：豆包/Kimi/DeepSeek/千问
+
+> 2026 年，中国大模型厂商的竞争已从「能不能用」升级到「谁更好用、更省钱」。这篇文章把豆包、Kimi、DeepSeek、千问四个头部平台的核心信息整理成册：入口在哪、怎么接入 API、编程助手有哪些、近似 Claude/Codex 的能力值几分、token 多少钱。适合需要选型或整合多个平台的开发者参考。
+
+---
+
+## 一览表
+
+|  | **豆包** | **Kimi** | **DeepSeek** | **千问（通义）** |
+|--|----------|-----------|--------------|----------------|
+| **官网** | [doubao.com](https://doubao.com) | [kimi.moonshot.cn](https://kimi.moonshot.cn) | [chat.deepseek.com](https://chat.deepseek.com) | [qianwen.com](https://qianwen.com) |
+| **网页版** | ✅ doubao.com | ✅ moonshot.cn | ✅ chat.deepseek.com | ✅ qianwen.com |
+| **桌面端** | ✅ 豆包客户端（Win/Mac） | ✅ Kimi Work（Win/Mac） | ❌ 暂无官方桌面端 | ❌ 无独立桌面端 |
+| **移动端** | ✅ 豆包 App（iOS/Android） | ✅ Kimi App（iOS/Android） | ✅ DeepSeek App（iOS/Android） | ✅ 通义 App（iOS/Android） |
+| **VSCode 插件** | ✅ MarsCode（功能完整） | ✅ Kimi Code | ❌ 社区方案为主 | ✅ 通义灵码（TONGYI Lingma） |
+| **JetBrains 插件** | ✅ MarsCode | ❌ | ❌ | ✅ 通义灵码 |
+| **API 获取** | 火山方舟 volcengine/ark | Moonshot 控制台 | DeepSeek 开放平台 | 阿里云百炼 bailian.aliyun.com |
+| **免费额度** | 每个模型 50 万 tokens | 注册送 15 元 tokens | 注册送额度（近期有过波动） | 百炼开通后 100 万 tokens / 180 天 |
+| **旗舰模型** | Doubao 1.5 Pro 256k | Kimi K3（2026.07） | DeepSeek-V4-Pro | Qwen3.7-Max |
+| **近似 Codex/Claude Code** | MarsCode IDE（完整 AI 编程） | Kimi K2.7 Code（可配 Claude Code） | 无官方编程 Agent | 通义灵码（代码补全为主） |
+| **特色能力** | 字节生态联动、App 排名第一 | 256K 超长上下文、编程竞技场第一 | 推理模型 R1、低价开源 | 阿里云 SDK 深度优化、开源生态最广 |
+
+---
+
+## 二、豆包
+
+**官网**：https://doubao.com
+
+### 入口与客户端
+
+网页版直接访问 doubao.com，注册后即可使用。桌面客户端支持 Windows 和 macOS，移动端有豆包 App，在苹果 App Store 和各大安卓应用市场的 AIGC 类中下载量长期排名第一。
+
+### 编程助手：MarsCode
+
+豆包旗下有独立的 AI 编程工具 **MarsCode**（官网 marscode.cn），功能完整度在国内编程助手位居前列：
+
+- **代码补全 / 代码补全 Pro**：基于上下文预测下一个改动点，支持 Tab 键直接采纳
+- **自然语言生成代码**：输入需求描述，直接生成可用代码
+- **代码解释 / 单元测试生成 / 代码审查 / Bug 修复**：覆盖开发全流程
+- **一键 Apply**：AI 生成代码片段并直接填充到对应位置，无需复制粘贴
+- **支持 IDE**：VSCode、JetBrains 全家桶，以及官方在线 MarsCode IDE（开箱即用）
+
+VSCode 安装方式：在扩展商店搜索「MarsCode」，安装后用豆包账号登录即可。
+
+### API 获取
+
+豆包 API 走 **火山方舟（Volcengine Ark）** 平台：
+
+1. 访问 https://www.volcengine.com/product/ark 注册账号（支持手机号）
+2. 进入控制台 → 创建 API Key
+3. 选择想用的模型，平台会给出对应的 Model ID 和调用示例
+4. 配置环境变量 `ARK_API_KEY`，用官方 Python SDK 发起调用
+
+豆包 API 与 OpenAI 接口高度兼容，代码迁移成本低。火山方舟 Python SDK：
+
+```bash
+pip install -U 'volcengine-python-sdk[ark]'
+```
+
+```python
+import os
+from volcenginesdkarkruntime import Ark
+
+client = Ark(api_key=os.environ.get("ARK_API_KEY"))
+completion = client.chat.completions.create(
+    model="<Model ID>",  # 如 Doubao-pro-32k
+    messages=[{"role": "user", "content": "你好"}]
+)
+```
+
+### 旗舰模型与定价
+
+豆包最新旗舰为 **Doubao 1.5 Pro 256k**，基于稀疏 MoE 架构，仅用稠密模型七分之一的参数量超越 Llama-3.1-405B 等大模型，支持 256K 上下文窗口，中文、代码、推理多个基准优于 GPT-4o 和 Claude 3.5 Sonnet。
+
+各模型按量计费，新用户每个规格赠送 50 万免费 tokens。参考价格区间（具体以平台实时定价为准）：
+
+| 模型 | 输入价格 | 输出价格 |
+|------|----------|----------|
+| Doubao-pro-32k | ~¥0.8 / 1M tokens | ~¥2 / 1M tokens |
+| Doubao 1.5 Pro 256k | 平台询价 | 平台询价 |
+
+---
+
+## 三、Kimi（月之暗面）
+
+**官网**：https://kimi.moonshot.cn
+
+### 入口与客户端
+
+Kimi 网页版入口为 moonshot.cn，注册后直接使用。移动端有 Kimi App（iOS/Android），支持对话历史同步。桌面端有 **Kimi Work**（Windows/macOS），面向企业用户，集成深度研究、建站、PPT 等 Agent 级功能。
+
+### 编程助手：Kimi Code + 可配 Claude Code
+
+Kimi 的编程能力在国内处于领先位置：
+
+- **Kimi Code**：基于 Kimi K2.7 Code 模型，专攻 AI 编程，支持代码生成、优化、解释
+- **Kimi K3**（2026.07 上线）：全球首款 3T 级开源模型，2.8 万亿参数，100 万 token 上下文，SWE-bench 等编程基准全球第一，在多个榜单逼平 Claude Fable 5
+- **Claude Code 配置**：Kimi K2 支持以 API Key 方式接入 Claude Code，配置后 Kimi 模型驱动 Claude Code，成本约为 Claude Pro 的 20%（约直降 80%）
+
+```json
+// ~/.claude/settings.json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.moonshot.cn/anthropic/",
+    "ANTHROPIC_API_KEY": "sk-your-kimi-key"
+  }
+}
+```
+
+### API 获取
+
+1. 访问 Moonshot 控制台：https://platform.moonshot.cn
+2. 注册账号 → 创建 API Key → 复制保存
+3. 文档地址：platform.moonshot.cn/docs
+4. Kimi API 完全兼容 OpenAI 接口，SDK 迁移零成本
+
+新用户注册赠送 15 元 tokens 额度。
+
+### 旗舰模型与定价（2026.07 更新）
+
+| 模型 | 定位 | 输入价格 | 输出价格 |
+|------|------|----------|----------|
+| Kimi K3 | 旗舰通用（SWE 全球第一） | ¥13 / 1M tokens | ¥54 / 1M tokens |
+| Kimi K2.7 Code | 编程专用 | ¥13 / 1M tokens | ¥54 / 1M tokens |
+| Kimi K2.7 Code 高速版 | 推理加速版（~260 tokens/s） | ¥26 / 1M tokens | ¥108 / 1M tokens |
+| moonshot-v1-32k | 长文本主力 | ¥6 / 1M tokens | 平台实时价 |
+
+K3 的完整模型权重已于 2026.07.27 开源发布，可本地部署。
+
+---
+
+## 四、DeepSeek
+
+**官网**：https://chat.deepseek.com
+
+### 入口与客户端
+
+DeepSeek 官网网页版直接可用，支持推理（R1）、文档分析、联网搜索三大核心能力。移动端有 DeepSeek App（iOS/Android）。
+
+**⚠️ 注意事项**：DeepSeek 高峰期服务器压力大，曾多次出现服务不稳定甚至充值暂停的情况，建议同时在硅基流动（cloud.siliconflow.cn）等第三方平台注册账号做备用。
+
+### 编程助手
+
+DeepSeek **暂无官方 VSCode 插件**，但有以下替代路径：
+
+1. **硅基流动**：注册后获取 API Key，接入任意支持 OpenAI 接口的客户端（如 Cursor、Continue、VSCode + OpenAI 插件）
+2. **VSCode + OpenAI 插件**：安装「Chat with Genie」等插件，填入 DeepSeek API Key
+3. **硅基流动在线体验**：cloud.siliconflow.cn 提供网页版，无需配置直接使用满血 R1
+
+### API 获取
+
+1. 访问 https://platform.deepseek.com → 注册账号
+2. 左侧菜单 → API Keys → 创建 Key
+3. 参考官方文档发起调用
+
+DeepSeek V4 系列价格（平时段；高峰时段 9:00–12:00 / 14:00–18:00 翻倍）：
+
+| 模型 | 输入（缓存命中） | 输入（未命中） | 输出 |
+|------|-----------------|--------------|------|
+| V4 Pro | ¥0.025 / 1M | ¥3 / 1M | ¥6 / 1M |
+| V4 Flash（轻量） | ¥0.02 / 1M | ¥1 / 1M | ¥2 / 1M |
+
+> DeepSeek V3 早期有过极低优惠价（0.1 元/1M 输入），后已多次调价，当前价格为调整后水平。
+
+---
+
+## 五、千问（通义千问 / Qwen）
+
+**官网**：https://qianwen.com
+
+### 入口与客户端
+
+千问网页版 qianwen.com，移动端有 **通义 App**（iOS/Android），支持对话、图片理解与生成、翻译、写作等功能。千问系列模型（Qwen3）也已在通义 App 全面上线。
+
+没有独立桌面端，企业用户可通过阿里云百炼平台使用。
+
+### 编程助手：通义灵码（TONGYI Lingma）
+
+通义灵码是阿里云官方出品的智能编码助手（官网 tongyi.aliyun.com/lingma），功能覆盖开发全流程：
+
+- **行级/函数级实时续写**：上下文感知代码补全
+- **自然语言生成代码**：描述需求直接出代码
+- **单元测试生成 / 代码注释生成 / 代码解释**
+- **研发智能问答**：报错排查、技术问题解答
+- **阿里云 SDK 深度优化**：调用阿里云 API 场景调优
+- **支持 IDE**：VSCode、JetBrains IDEs、Visual Studio，以及远程开发场景（Remote SSH / Docker / WSL / Web IDE）
+
+VSCode 安装：扩展商店搜索「TONGYI Lingma」，安装后用阿里云账号登录即可。
+
+### API 获取
+
+千问走 **阿里云百炼平台**（bailian.aliyun.com）：
+
+1. 注册阿里云账号并完成实名认证
+2. 访问百炼控制台 → 开通模型服务
+3. 创建 API Key（有效期可设置）
+4. 按模型 ID 调用，计费方式为按量后付费
+
+新用户赠送 100 万 tokens，有效期 180 天。
+
+### 旗舰模型与定价
+
+千问 Qwen3 于 2025.04 发布，包含 8 款不同规模模型，旗舰 Qwen3-235B-A22B（MoE）成为当时全球最强开源模型。2026 年最新旗舰为 **Qwen3.7-Max**。
+
+| 模型 | 定位 | 输入价格 | 输出价格 | 折扣 |
+|------|------|----------|----------|------|
+| Qwen-Long | 长文档主力（GPT-4 级） | ¥0.5 / 1M tokens | 平台实时 | — |
+| Qwen3.7-Plus | 全能智能体 | ¥2 / 1M | ¥8 / 1M | **限时 8 折** |
+| Qwen3.7-Max | 旗舰全能智能体 | ¥2 / 1M | ¥8 / 1M | **限时 5 折** |
+| Qwen-VL 系列 | 视觉理解 | 平台实时 | 平台实时 | — |
+
+千问还有一个显著优势：**开源生态最广**，Qwen 系列被大量第三方项目集成使用，可本地部署。
+
+---
+
+## 六、选型建议
+
+| 场景 | 推荐 |
+|------|------|
+| **个人日常对话 / 写作** | 豆包（App 体验好）或 千问（开源生态广） |
+| **长文档处理（论文/报告）** | Kimi（256K/1M 上下文优势明显） |
+| **编程 / Agent 开发** | Kimi（K3 代码能力最强）或 豆包 MarsCode |
+| **预算敏感 / 低成本调用** | DeepSeek V4 Flash（¥2 / 1M 输出，极低价） |
+| **需要稳定可靠的企业级服务** | 千问（阿里云生态，稳定性最好） |
+| **想同时用多个模型做对比** | 硅基流动（cloud.siliconflow.cn）一个账号聚合多家 API |
+
+---
+
+*数据截至 2026 年 8 月，价格以各平台实时公告为准。Kimi 相关数据参考 moonshot.cn 官方公告；DeepSeek 价格区间参考 platform.deepseek.com 文档；千问价格参考 bailian.aliyun.com 计费页面。*
