@@ -1,0 +1,308 @@
+---
+title: "搭一个 Agent 需要哪些技术栈：从调 API 到能帮你读论文"
+description: "第一次上手搭 Agent 容易卡在「该学什么」。本文用「读自动驾驶论文 + 写笔记」做主线，把技术栈拆成地基、手脚、大脑、工程化、落地五层，每层给「学什么 + 最小可跑代码」，不堆框架、先把闭环跑通。"
+pubDate: 2026-08-05
+tags:
+  - Agent
+  - LLM
+  - 技术栈
+  - Tool Calling
+  - 入门教程
+---
+
+# 搭一个 Agent 需要哪些技术栈：从调 API 到能帮你读论文
+
+> 我第一次想搭 Agent 的时候，搜出来的教程要么直接甩一个 LangChain 流程图，要么从 Transformer 原理讲起。两边都让我更迷糊：我到底该先学什么？
+
+这篇写给和我一样的**第一次上手的人**。主线例子是：搭一个能帮你**读自动驾驶论文、顺手写结构化笔记**的 Agent。我们从一个能跑的玩具循环，一层层加到能真的产出笔记文件。
+
+---
+
+## 0. 先看清全景：Agent 的技术栈分五层
+
+不用一次学完，按这个顺序来：
+
+1. **地基**：会调 LLM 的 API（大模型的「望远镜」怎么用）
+2. **手脚**：让 Agent 能调工具（Function Calling）
+3. **大脑**：编排 + 记忆（Agent Loop、短期/长期记忆）
+4. **工程化**：别让 demo 死在本地（框架、流式、可观测）
+5. **落地**：部署成别人能用的产品（服务、前端、云）
+
+每层"学什么 + 最小代码"，我们顺着论文阅读 Agent 的例子走。
+
+---
+
+## 1. 地基：先学会调 API
+
+### 学什么
+
+- 用 SDK 发一次对话请求
+- 写清楚的 system prompt（你开篇文里说的"任务边界放前几条"就在这里用）
+- 知道 token 是要花钱的，长上下文不是免费午餐
+
+### 最小代码：第一次调 API
+
+```python
+# pip install openai python-dotenv
+from openai import OpenAI
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # 从 .env 读 API Key，别硬编码
+
+client = OpenAI(
+    api_key=os.environ["OPENAI_API_KEY"],
+    # 换平台只改这两行，接口完全兼容：
+    # base_url="https://api.moonshot.cn/v1",  # Kimi
+    # api_key=os.environ["KIMI_API_KEY"],
+)
+
+resp = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "你是自动驾驶领域的论文助手，用中文回答"},
+        {"role": "user", "content": "用一句话解释 BEVFormer 的核心思想"},
+    ],
+)
+print(resp.choices[0].message.content)
+```
+
+跑通这一步，你就已经"用上了大模型"。但注意：这还**不是 Agent**，它只是「一问一答」，没有行动能力。
+
+---
+
+## 2. 手脚：让 Agent 能调工具
+
+### 学什么
+
+- **Function Calling**：告诉模型"你有这些函数可用"，它决定什么时候调、传什么参数
+- 工具用 **JSON Schema** 描述（名字、干嘛用、参数是啥）
+- 模型返回"我要调这个函数"，你本地执行，把结果喂回去
+
+### 最小代码：给 Agent 装上"手"
+
+我们给论文助手装三个工具：搜论文、读论文、写笔记。
+
+```python
+import json
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_arxiv",
+            "description": "在 arXiv 上搜索自动驾驶相关论文",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词，如 BEV perception"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_note",
+            "description": "把论文笔记写入本地 Markdown 文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string"},
+                    "content": {"type": "string", "description": "笔记正文（Markdown）"},
+                },
+                "required": ["filename", "content"],
+            },
+        },
+    },
+]
+
+# 工具的真实实现（本地执行）
+def search_arxiv(query: str):
+    # 真实场景用 arxiv 包或 arXiv API；这里返回示例
+    return f"找到 2 篇关于 {query} 的论文：\n1. BEVFormer (2022)\n2. PETR (2022)"
+
+def write_note(filename: str, content: str):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+    return f"已写入 {filename}"
+```
+
+### Agent Loop：思考 → 行动 → 观察
+
+```python
+messages = [
+    {"role": "system", "content": "你是自动驾驶论文助手，会用工具帮用户找论文并写笔记"},
+    {"role": "user", "content": "帮我找 BEV 感知的论文，写一份对比笔记"},
+]
+
+while True:
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        tools=tools,
+    )
+    msg = resp.choices[0].message
+
+    # 情况 A：模型决定调工具
+    if msg.tool_calls:
+        messages.append(msg)  # 先把模型的"意图"存下来
+        for call in msg.tool_calls:
+            fn = call.function.name
+            args = json.loads(call.function.arguments)
+            # 本地执行工具
+            if fn == "search_arxiv":
+                result = search_arxiv(**args)
+            elif fn == "write_note":
+                result = write_note(**args)
+            # 把结果回传给模型
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.id,
+                "content": str(result),
+            })
+        continue  # 带着工具结果，再循环一次
+
+    # 情况 B：模型觉得做完了，给出最终回答
+    print(msg.content)
+    break
+```
+
+**这就是 Agent 的核心闭环**：模型不是一次回答完，而是"想调工具 → 你执行 → 结果喂回去 → 它再想"，直到它认为任务完成。
+
+你开篇文里说"最好的 Agent 是有底气的不确定"——这个 `while True` 循环，就是它"底气"的来源：在预算内它自己决定多绕几圈，而不是每步都问你。
+
+---
+
+## 3. 大脑：编排与记忆
+
+### 学什么
+
+- **Agent Loop** 本身就是最简单的编排（上面那个 while）
+- 进阶编排模式：ReAct（推理+行动交替）、Plan-and-Execute（先规划再分步执行）
+- **记忆**：短期=对话历史（messages 列表），长期=向量库（跨会话记住你读过啥）
+
+### 最小代码：加一点"记忆"
+
+其实你已经在用短期记忆了——`messages` 列表就是。模型能看到前面所有的对话和工具结果。
+
+想让它"记住你上周读过的论文"？最简单的做法是把历史落盘：
+
+```python
+import json
+
+# 会话结束时，把 messages 存起来
+def save_memory(messages, path="memory.json"):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(messages, f, ensure_ascii=False, indent=2)
+
+# 下次启动时加载，拼到新会话前面
+def load_memory(path="memory.json"):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+```
+
+长期记忆进阶版会用**向量数据库**（Chroma / Qdrant）：把笔记 embed 成向量，下次问"我之前读过哪些 BEV 的论文"，先检索再回答。这块新手可以先放一放，等循环跑顺了再加。
+
+---
+
+## 4. 工程化：别让 demo 死在本地
+
+这一层先**知道有这些事**，不用立刻做：
+
+- **框架选型**：手写 loop 理解原理后，复杂任务再看 LangChain / LlamaIndex / AutoGen / CrewAI。新手别一上来就装框架，容易被抽象层劝退。
+- **流式输出**：用 SSE 让前端一个字一个字蹦出来（`stream=True`），体验好很多。
+- **可观测性**：接日志 + tracing（如 LangSmith），不然 agent 哪步抽风了你都不知道。
+- **错误处理**：API 超时、工具报错、模型乱调参数——这些在生产环境天天发生。
+
+---
+
+## 5. 落地：让别人也能用
+
+- **后端**：FastAPI 包一层 HTTP 接口，前端来调
+- **前端**：Web 页面 / 微信小程序 / 公众号（你用的 QClaw 微信小程序就是这类入口）
+- **部署**：Vercel / Cloudflare Pages（你博客就部署在这）跑前端，Agent 服务跑容器或云函数
+- **向量库**：Chroma（本地）、Qdrant（自托管）、Pinecone（云）
+
+---
+
+## 附录：能跑的最小论文 Agent（复制即用）
+
+把前面拼起来，填好 `.env` 里的 `OPENAI_API_KEY`，就能跑：
+
+```python
+# agent_minimal.py
+from openai import OpenAI
+import os, json
+from dotenv import load_dotenv
+
+load_dotenv()
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "write_note",
+        "description": "写笔记到本地文件",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["filename", "content"],
+        },
+    },
+}]
+
+def write_note(filename, content):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+    return f"已写入 {filename}"
+
+messages = [
+    {"role": "system", "content": "你是自动驾驶论文助手"},
+    {"role": "user", "content": "写一段 BEVFormer 的笔记，存成 bevformer_note.md"},
+]
+
+while True:
+    resp = client.chat.completions.create(
+        model="gpt-4o", messages=messages, tools=tools)
+    msg = resp.choices[0].message
+    if msg.tool_calls:
+        messages.append(msg)
+        for call in msg.tool_calls:
+            args = json.loads(call.function.arguments)
+            result = write_note(**args)
+            messages.append({"role": "tool",
+                             "tool_call_id": call.id, "content": str(result)})
+        continue
+    print(msg.content)
+    break
+```
+
+跑完你会看到：当前目录多了一个 `bevformer_note.md`——**你的 Agent 真的"动手"写了文件**。这一刻，它不再是 chatbot，是 agent。
+
+---
+
+## 总结
+
+搭一个 Agent 的技术栈，按难度递增其实是：
+
+| 层 | 核心能力 | 最小实践 |
+|----|---------|---------|
+| 地基 | 调 API | 发一次对话请求 |
+| 手脚 | Tool Calling | 定义工具 + while 循环 |
+| 大脑 | 编排 + 记忆 | messages 历史 / 落盘 |
+| 工程化 | 稳定可观测 | 框架 / 流式 / 日志 |
+| 落地 | 产品化 | 服务 + 前端 + 云 |
+
+新手最该先搞定的，是前 3 层那个**能调工具、能循环、能记住**的闭环。框架是后话。
+
+下一篇可以写：怎么给这个 Agent 加**长期记忆（向量库）**，让它跨会话记住你读过的论文。或者写：怎么用 **MCP** 把工具接入标准化，不用每个 Agent 重写一遍。
+
+想看哪个，留言或者找我。
