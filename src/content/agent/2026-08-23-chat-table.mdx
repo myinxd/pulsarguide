@@ -1,0 +1,112 @@
+---
+title: "chat-table：把六家大模型装进同一个网页"
+description: "一个本地运行的轻量工具，在浏览器里切换 Kimi、通义千问、OpenAI、Claude、DeepSeek、Gemini，统一管理会话与 Token 费用。已开源并发布到 PyPI。"
+pubDate: 2026-08-23
+tags:
+  - Agent
+  - LLM
+  - 工具
+  - 开源
+---
+
+# chat-table：把六家大模型装进同一个网页
+
+> 每个大模型厂商都有自己的网页、自己的客户端、自己的 API Key——当你要在 Kimi 和 Claude 之间来回对比答案时，光切换页面就够烦的。于是我自己写了 chat-table：一个本地运行的小工具，让六家模型住进同一个网页。
+
+---
+
+## 为什么做这个工具
+
+日常用大模型，基本会遇到这几个麻烦：
+
+- 各家模型分散在**不同的网页和客户端**，对比回答要来回切换
+- 每个平台一套 **API Key**，东一个西一个
+- 会话记录不统一，换个模型上下文就断了
+- 想统计一下**每个模型花了多少 token 多少钱**，基本靠手动记账
+
+chat-table 就是针对这些痛点做的：本地起一个轻量 Web 服务，浏览器打开一个页面，六家 Provider 随便切。
+
+## 它是什么
+
+一句话：**带 Web 界面的多 Provider 大模型路由工具**。
+
+支持六家模型：
+
+- **Kimi**（月之暗面）
+- **Qwen / 通义千问**（阿里）
+- **OpenAI**
+- **Anthropic / Claude**
+- **DeepSeek**
+- **Gemini**（Google）
+
+## 核心功能
+
+| 功能 | 说明 |
+|------|------|
+| 🌐 多 Provider 切换 | 一个页面内切换 Kimi / Qwen / OpenAI / Claude / DeepSeek / Gemini |
+| 💬 多轮会话 | 发送消息自动携带上下文，对话不断片 |
+| ⚡ 多任务并发 | 最多同时跑 3 个任务 |
+| 📊 Token 统计 | 输入 / 输出 tokens、用量费用一目了然 |
+| ↩️ History 恢复 | 从历史记录恢复某个会话继续聊 |
+| 💾 持久化 | 会话自动保存，重启不丢 |
+| 🎨 轻量 Web UI | 点击选模型、发任务、看用量，无需命令行 |
+
+## 30 秒上手
+
+```bash
+pip install chat-table
+
+# 启动，自动打开浏览器
+chat-table --open
+```
+
+浏览器访问 `http://localhost:8877` 即可。
+
+也可以指定端口和数据目录——每个项目一套独立会话：
+
+```bash
+chat-table -p 8878 -d ~/projects/my-project/.model_router
+```
+
+## API Key 怎么配
+
+两种方式任选：
+
+**方式一：环境变量（推荐）**
+
+```bash
+export KIMI_API_KEY="sk-xxx"
+export DASHSCOPE_API_KEY="sk-xxx"
+export OPENAI_API_KEY="sk-xxx"
+# ...
+chat-table
+```
+
+**方式二：Web UI 里填**
+
+打开页面上的 ⚙️ Config 页，直接填入各家的 Key，运行时生效。
+
+## 数据存在哪
+
+所有会话数据保存在本地 `~/.model_router/state.json`，不经过任何第三方服务器。要完全清空：
+
+```bash
+pip uninstall chat-table
+rm -rf ~/.model_router/
+```
+
+## 一个彩蛋：Agent 一句话安装
+
+chat-table 仓库里带了一份 **QClaw 技能文件**（`skills/chat-table-toolkit/SKILL.md`）。如果你在用 QClaw 这类 Agent，把它放到 `~/.qclaw/skills/chat-table-toolkit/`，之后只要对 Agent 说一句：
+
+> 安装 chat-table
+
+Agent 就会自动完成：检测 Python 版本 → 安装（优先 PyPI，失败回退 GitHub）→ 引导填 API Key → 启动服务 → 告诉你访问地址。在全新机器上搭环境，这是最省事的方式。
+
+## 开源信息
+
+- **源码**：https://github.com/myinxd/chat-table
+- **安装包**：`pip install chat-table`（PyPI）
+- 往 GitHub 打 tag 推送，GitHub Actions 会自动构建并发布到 PyPI
+
+如果你也在为多平台切换头疼，欢迎试一下，顺手的话在 GitHub 给个 star ⭐
