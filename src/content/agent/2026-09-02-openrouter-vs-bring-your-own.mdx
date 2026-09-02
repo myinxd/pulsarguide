@@ -1,0 +1,112 @@
+---
+title: "模型路由网关怎么选：OpenRouter 还是自己攒"
+description: "400+ 模型一个 API 全接入、自动故障转移、token 不加价只收 5.5% 充值费——OpenRouter 把多模型管理税降到了很低。但网关中转的延迟、数据路径、国内网络都是代价。本文用数据对比 OpenRouter 与自建路由（以 chat-table 为例），给出一套选型方法。"
+pubDate: 2026-09-02
+tags:
+  - Agent
+  - LLM
+  - OpenRouter
+  - 工具
+  - 对比
+---
+
+# 模型路由网关怎么选：OpenRouter 还是自己攒
+
+> 多模型时代有一笔隐性的「管理税」：N 家供应商、N 套 API Key、N 个账单、N 种限流策略。上个月我刚把自己攒的方案 chat-table 开源了——本地直连六家模型、数据不出机器。那买现成的 OpenRouter 值不值？这篇用数据把两个方案摆到台面上比。
+
+---
+
+## OpenRouter 是什么
+
+一句话：**模型界的统一网关**。OpenRouter 把 70+ 家供应商（OpenAI、Anthropic、Google、DeepSeek、Meta 等）的 400+ 模型聚合成一个 OpenAI 兼容端点，你只需要一个 key、一个余额、一个 base URL。
+
+- 2023 年创立（联合创始人 Alex Atallah 与 Louis Vichy）
+- 2025 年 6 月 a16z 领投 $40M A 轮；2026 年 5 月完成 $1.13 亿 B 轮，估值 $13 亿
+- 截至 2026 年中：月处理 100T tokens、1000 万+ 用户、25 万+ 应用接入（Replit、Hermes Agent、Kilo Code 都是客户）
+- 切换成本极低：把 SDK 的 base URL 和 key 换掉即可，代码不用动
+
+```python
+# 原来：直连 OpenAI
+client = OpenAI(api_key="sk-openai-xxx")
+
+# 现在：走 OpenRouter，模型随便换
+client = OpenAI(
+    api_key="sk-or-xxx",
+    base_url="https://openrouter.ai/api/v1",
+)
+```
+
+## 它怎么赚钱：token 不加价，赚充值费
+
+这是 OpenRouter 模式最特别的地方，也是判断它值不值的核心：
+
+- **token 价格 pass-through 不加价**（官方口径）：走网关和直连供应商同价，包括 DeepSeek 这类开源模型在多家供应商之间的价格差异，它也不抽成
+- 收入来自**充值手续费**：信用卡 5.5%（单笔最低 $0.80）、crypto 5%
+- **BYOK**（自带各家 key 走它的路由层）：每月有免费额度（按牌价约 $25,000/月），超出部分收等效成本的 5%
+- **免费层**：25+ 个免费模型（model 名带 `:free` 后缀），未充值每天 50 次请求、20 RPM；充值 $10 以上升到 1000 次/天
+
+算两笔账就知道它的真实成本：月消费 $1000 的用户，约 $55 是平台费，换来的是 400+ 模型的接入和自动故障转移，这笔账通常划算；但小额充值被 $0.80 最低手续费坑得很惨——充 $5 实际费率 16%，充到 $15 以上才回到 5.5% 的水平。另外两个限制要记牢：充值余额 365 天不用会过期，退款只接受购买后 24 小时内且手续费不退。
+
+## 值钱的路由层
+
+网关的核心价值不在「转发」，在路由决策：
+
+- **自动故障转移**：供应商挂掉、限流、返回垃圾，自动切到备用模型，失败请求不计费
+- **动态后缀**：`:nitro` 按吞吐排序追速度、`:floor` 按价格排序追省钱、`:exacto` 按工具调用可靠性排序
+- **fallback 链**：一个请求按你指定的模型顺序依次尝试
+- **presets**：组织级预设（如 `@preset/support-bot`），把模型范围、参数、限额打包，团队成员直接用
+- **按 key 限额与账单归集**：团队共用一个余额池，每个人分配额度
+
+隐私和合规也做成了功能：默认不记录 prompt 内容，可选开启记录换 1% 折扣；可以强制只路由到支持 zero data retention 的供应商（ZDR 路由）；企业版支持地域锁定（EU region locking、Sovereign AI 数据驻留）、SSO、SOC-2。
+
+2026 年的新动作值得关注：MCP server（把模型目录接进编辑器）、Agent SDK（@openrouter/agent，内置多轮会话与工具执行）、免费模型自动路由（2026 年 2 月上线，从零成本模型池自动选）。OpenRouter 官方博客披露的数据也侧面说明开源模型在 agent 场景的增长：DeepSeek V4 在该平台的 agentic token 份额半年翻倍。
+
+## OpenRouter vs 自己攒：对比表
+
+以 chat-table 为自建方案的代表（本地 Web 服务、直连六家、数据存 `~/.model_router/`）：
+
+| 维度 | OpenRouter | 自己攒（chat-table 这类） |
+|------|-----------|--------------------------|
+| 模型覆盖 | 400+ 模型 / 70+ 供应商，开箱即用 | 你自己接几家就几家（chat-table 接了 6 家） |
+| 额外成本 | 充值手续费 5.5%（$0.80 最低） | 零——直连各家，token 原价 |
+| 延迟 | 网关中转 +25-40ms | 直连，无额外延迟 |
+| 故障转移 | 自动，失败请求不计费 | 没有，挂了要手动换 |
+| 免费模型 | 25+ 个 `:free` 模型 | 无 |
+| 数据路径 | 请求经第三方网关（可选 ZDR） | 全本地，不出机器 |
+| 国内网络 | 需要代理，稳定性一般 | 直连国内 API（Kimi/千问/DeepSeek）友好 |
+| 账单 | 一个余额池，团队可限额 | 各家分开充值、分开记账 |
+| 开发维护 | 零开发，API 稳定 | 自己写、自己维护（我写了 chat-table 并开源了） |
+| 成本风险 | 余额 365 天过期、退款 24h 内 | 钱在自己手里，无平台风险 |
+
+## 30 秒上手 OpenRouter
+
+注册 → 充值（≥$10 解锁 1000 次/天）→ 建 API Key，然后：
+
+```bash
+pip install openai
+
+# 显式指定模型，失败自动降级
+curl https://openrouter.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+  -d '{
+    "model": "openai/gpt-5.5",
+    "models": ["openai/gpt-5.5", "anthropic/claude-opus-4.8", "deepseek/deepseek-v4:free"],
+    "messages": [{"role": "user", "content": "用一句话解释什么是自动驾驶端到端"}]
+  }'
+```
+
+`models` 数组就是 fallback 链：第一个不可用自动试第二个，最后那个 `:free` 兜底——这就是路由层最实在的价值。
+
+## 我的判断：两个层级的东西，可以组合
+
+写完 chat-table 再用过 OpenRouter 之后，我的结论是它们解决的不是同一个问题：OpenRouter 解决「通往所有模型的路由」——快速试模型、自动故障转移、团队统一计费，代价是延迟、数据路径和国内网络；自建方案解决「本地控制面」——数据不出机器、直连国内 API、成本完全透明，代价是模型覆盖和故障处理都得自己来。
+
+场景上很好分：做原型、做多模型评测、团队协作、需要 failover → OpenRouter 的 5.5% 是性价比极高的外包；数据敏感、人在国内、手里已经有一堆各家 key、用量大 → 自建更划算。
+
+两者甚至不是二选一：chat-table 未来完全可以接 OpenRouter 当第七家 provider——日常用国内直连，需要全球模型或故障转移时走网关。**选型不是站队，是把「模型接入」这层复杂度放在你觉得最舒服的位置。**
+
+## 总结
+
+路由网关的选择，本质是回答三个问题：多花的 25-40ms 延迟和 5.5% 手续费，买来了什么？数据路径你介意到哪一步？你的网络环境允不允许走第三方网关？三个问题想清楚，答案自己会浮出来。
+
+顺带一提，chat-table 在 GitHub（myinxd/chat-table）和 PyPI 上都开源了，想看看自建方案长什么样可以直接去读源码。

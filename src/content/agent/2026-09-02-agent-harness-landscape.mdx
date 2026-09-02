@@ -1,0 +1,109 @@
+---
+title: "模型之外：2026 年选 AI 编程 Agent，先看壳（Harness）"
+description: "同一个模型，换一层壳，评测分数能差出三十分。Terminal-Bench 与 SWE-bench Pro 的数据说明：2026 年 frontier 模型已经趋同，真正决定体验上限的是模型外面那层 harness——工具、权限、上下文、循环。本文拆解主流 harness 的差异与选型方法。"
+pubDate: 2026-09-02
+tags:
+  - Agent
+  - Harness
+  - LLM
+  - 工具
+  - 对比
+---
+
+# 模型之外：选 AI 编程 Agent，先看壳（Harness）
+
+> 2026 年 1 月，Andrej Karpathy 发了条引了 4 万赞的推：他一个月内从 80% 手写代码变成 80% 让 Agent 写代码。评论区问得最多的却是「你用的哪个模型」。这个问题在 2026 年已经问错了——各家 frontier 模型的差距正在缩小，而模型外面那层壳（harness），决定了同一个模型在你的仓库里是 60 分还是 90 分。
+
+---
+
+## Harness 是什么：模型负责想，壳负责做
+
+Harness 这个词不是营销发明，它来自两个正经出处：Simon Willison 对 agent 的定义——「拿着工具、对着目标跑循环、根据每次结果决定下一步的系统」；以及 Princeton 的 SWE-agent 论文（NeurIPS 2024）里提出的 agent-computer interface——模型和真实仓库之间那层「命令与观察」的接口。
+
+把这两个定义落到代码上，一个 harness 至少包含六件事：
+
+| 组件 | 干什么 |
+|------|--------|
+| 执行循环 | while True：调模型 → 执行工具 → 结果喂回 → 再调 |
+| 工具注册 | 模型能调用哪些函数、参数长什么样 |
+| 上下文管理 | 读哪些文件、喂多少代码、怎么压缩历史 |
+| 权限门控 | 哪些操作直接放行、哪些要问你 |
+| 跨会话记忆 | CLAUDE.md / AGENTS.md / GEMINI.md 这类项目记忆文件 |
+| 失败恢复 | 工具报错怎么重试、跑到一半怎么回滚 |
+
+一句话概括：**模型写文字，harness 决定这些文字被允许做什么、能看见什么、做错了怎么收场。**
+
+## 数据说：壳比模型更值钱
+
+先看 2026 年 6 月的 Terminal-Bench 2.1 榜单——它是目前唯一把「agent + 模型」当成组合来打分的公开榜：
+
+| Agent + 模型 | Terminal-Bench 2.1 |
+|---|---|
+| Codex CLI + GPT-5.5 | 83.4% |
+| Claude Code + Opus 4.8 | 78.9% |
+| Antigravity + Gemini 3.5 Flash | 76.2% |
+
+注意第一行和第二行的组合：Opus 4.8 在 SWE-bench Verified 上跟 GPT-5.5 基本打平（88.6% vs 88.7%），但换到各自家的 CLI 里，跑真实终端任务反而落后 4.5 分。**同一个模型，换一层壳，分数就变**——这就是 harness 在起作用。
+
+更硬核的证据来自 Scale 的 SWE-bench Pro 公开榜：所有模型塞进同一个 SWE-Agent 脚手架里裸测，第一名也只有 59% 上下；而各家在自己的 harness 上自报的 SWE-bench Verified 能到 90% 左右。30-40 分的差，就是 harness 的隐藏工作量——上下文怎么喂、编辑格式怎么给、验证循环怎么跑，这些都不写在模型的权重里。
+
+还有一个被低估的数字：Anthropic 自己测过，仅仅调整资源分配（一次任务给多少上下文预算），就能造成约 6 分的 Terminal-Bench 波动。所以现在的正确读榜姿势是：**看「agent + 模型」配对分，裸模型分数没有选型意义。**
+
+## 主流 harness 地图（2026 年中）
+
+按形态分四类，每一类的取舍逻辑完全不同：
+
+**官方 CLI 三家**——厂商自己做的参考实现：
+
+| 工具 | 开源 | 特点 |
+|------|------|------|
+| Claude Code | 闭源 | 最深的壳：30 个 hook 生命周期事件、Skills、subagents、并行 worktree、Agent Teams；代价是 token 消耗最高 |
+| Codex CLI | Apache-2.0（Rust 重写） | 默认沙箱执行，macOS 用 Seatbelt、Linux 用 Landlock 内核级隔离；支持本地模型，可审计 |
+| Gemini CLI | Apache-2.0 | 1M 上下文窗口，免费额度慷慨，GEMINI.md 做项目记忆 |
+
+**开源多模型派**——不绑厂商，BYOK 或用本地模型：
+
+| 工具 | 特点 |
+|------|------|
+| OpenCode | GitHub 180k+ stars，MIT，支持 75+ 供应商，client-server 架构，终端/桌面/IDE 都能连 |
+| Cline | VS Code 里最流行的开源 agent，Plan/Act 模式，每一步都先给你看 diff 再动手 |
+| Kilo Code | Cline/Roo 血统的整合平台，500+ 模型，拿了 $8M seed，自带 0% 加价的 Kilo Gateway |
+| Aider | Git 原生，每次修改自动提交，终端里的结对编程 |
+| OpenHands | 自治型：Docker 沙箱里跑，能从 GitHub issue 一路做到 PR |
+| Goose | Linux Foundation 托管，CLI + 桌面，MCP + ACP 双协议 |
+
+**IDE 型**：Cursor（Composer 2.5）、GitHub Copilot、Google Antigravity——agent 住在编辑器里，胜在交互反馈快，适合不想离开 IDE 的人。
+
+**国产阵营**：DeepSeek Harness（dsh，MIT，「一切皆插件」的 Cordis 架构）、Qwen Code（Gemini CLI 的 fork，专门调优开源 Qwen 模型）。
+
+两个避坑提醒：Roo Code 和 Void 这两个曾经的热门，2026 年年中都已归档，新项目别押它们；Claude Code 的 Pro 订阅条款不允许套在 OpenCode 这类第三方壳上跑，BYOK 要留意各家授权。
+
+## 壳和壳真正的差别在哪
+
+抛开营销话术，四个维度最影响实际体验：
+
+**沙箱**。Claude Code 和 Codex CLI 用 OS 级内核隔离（macOS Seatbelt、Linux Landlock+seccomp、Windows 上退到 Docker），即使模型被提示注入攻击，内核也会挡住文件系统和网络的越权访问；Gemini CLI 默认是进程级隔离加代理脚本，轻但没那么硬。n8n 的沙箱逃逸事件（研究者用替代 JS 语法绕过了应用层过滤，拿到整台服务器）说明：应用层过滤永远不如内核隔离可靠。**要跑生产级任务的机器，优先选内核级沙箱的壳。**
+
+**权限模型**。Claude Code 是三级 deny→ask→allow，规则按「拒绝优先」链匹配，比如 `Bash(npm run build)` 只精确匹配那一条命令；Codex 有 workspace 概念，破坏性 git 操作（force-push、改 config）即使自动模式也强制审批。权限粒度太粗会出事故——2025 年有个知名案例，Gemini CLI 删了整个项目目录，技术上说没越界，但用户预期「删目录前应该问我」。**审批疲劳和安全之间，每个壳给的默认值不一样，选之前先想清楚你更怕哪种。**
+
+**项目记忆**。CLAUDE.md / AGENTS.md / GEMINI.md 本质是 harness 的「第二大脑」：架构约定、命令、测试方式写清楚，agent 就不用每次重新发现。实测经验是记忆文件别超过 60 行、只写跨任务通用的约束，越长越容易被忽略。
+
+**开放性**。闭源的 Claude Code 换来的是深度调优；Codex CLI 开源可审计；OpenCode 是「模型中立」——同样的壳，插 Opus 4.8 接近 Claude Code，插 GPT-5.5 接近 Codex。选哪边取决于你要不要保留「随时换模型」的自由。
+
+## 我的使用体感
+
+说点主观的。我日常的工作流里，QClaw 负责跑 Agent 任务、chat-table 负责本地多模型路由、博客和这个项目本身是终端里改的。真实体感是：**换壳带来的体验变化，比换模型明显得多**。同一件事，上下文喂得够不够、审批烦不烦、失败能不能恢复，这些体感差异远大于两个旗舰模型之间的智商差。数据上第二节的 30-40 分差也印证了这点——这不是玄学，是 harness 实打实的工作量。
+
+## 怎么选：三步走
+
+1. **先定界面**：天天在终端干活 → Claude Code / Codex CLI / OpenCode / Aider；住在 VS Code → Cline / Kilo Code / Cursor；要全自动跑任务 → OpenHands / Codex Cloud。
+2. **再定控制粒度**：每一步都要审批（Cline）→ 会话级授权（Claude Code）→ 沙箱里自治（Codex / OpenHands）。越自治越高效，也越依赖沙箱质量。
+3. **最后看预算**：订阅制（Claude Code $20-100/月）vs BYOK 按量付费（OpenCode / Cline / Aider）。重度用户算 token 账单，轻度用户订阅制反而便宜。
+
+2026 年的平均数据是每位开发者同时用 2.3 个 AI 编码工具。没必要单押一个：IDE 里补全用轻的，重活丢给终端深壳，CI 里跑自治的——各取所长。
+
+## 总结
+
+模型趋同的时代，harness 就是体验上限。选壳的本质，是选你愿意把控制权交到哪一层：每一步都看着，还是沙箱里放手。想清楚「你怕什么、你受得了多烦的审批」，答案自然就出来了。
+
+下一篇我会写模型路由网关：OpenRouter 这类现成网关，和 chat-table 这种自己攒的方案，数据路径、成本、延迟各差多少，什么场景该选谁。
