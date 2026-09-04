@@ -1,0 +1,192 @@
+---
+title: "把 agent 从 Chat Completions 迁到 Responses：GPT-6 Astra 逼你走的一步"
+description: "GPT-6 Astra 的工具调用必须走 Responses API，老的 Chat Completions 既不支持工具、也不支持自定义 temperature/top_p。这不是 OpenAI 的心血来潮，是 agent 协议的一次收口。这篇是实操迁移指南：messages 怎么换成 input、同步工具怎么改成异步、长任务怎么用 background 模式、电脑操作怎么接 shell tool，附带避坑清单。"
+pubDate: 2026-09-04
+tags:
+  - Responses API
+  - Migration
+  - GPT-6
+  - Astra
+  - Agent
+  - Tool Calling
+---
+
+# 把 agent 从 Chat Completions 迁到 Responses：GPT-6 Astra 逼你走的一步
+
+> [上篇写了 Astra 把 harness 的执行层收进了模型](/agent/posts/2026-09-04-gpt-6-astra-model-eats-harness/)，其中提到一个硬约束：Astra 的工具调用必须走 Responses API，老的 Chat Completions 不支持工具，也不支持自定义 temperature / top_p / logprobs，连 `none` 推理档都没有。这篇不聊观点，聊怎么动手迁。如果你手上的 agent 还跑在 Chat Completions 上，Astra 上线等于给你下了最后通牒。下面是把一个真实 agent 迁过去会碰到的每一步。
+
+---
+
+## 为什么非迁不可
+
+先列强制项，省得你抱着「再等等」的念头：
+
+- **Astra 的工具调用只认 Responses API。** Chat Completions 上带 `tools` 的请求，换 `gpt-6-astra` 会直接报错，得按迁移指南改。
+- **没有 `temperature` / `top_p` / `logprobs`。** 这两参数在 Astra 上被收掉，靠推理强度（reasoning effort）控随机性，而不是采样温度。
+- **没有 `none` 推理档。** 想关推理省成本？不行，Astra 最低也是低强度推理，不能关。
+- **异步工具调用、中途干预、切推理强度都是 Responses 专属。** 这些正好是 Astra 当 agent 的核心能力，不用 Responses 就用不到。
+
+所以这不是「要不要上新特性」的选择题，是用 Astra 当 agent 的入场券。
+
+## 心智模型变了：从 messages 到 input + 状态
+
+Chat Completions 的核心是一串 `messages`：你每次得把完整历史（system / user / assistant / tool）重新拼好再发。Responses API 把这个负担卸给服务端——你发 `input`（当前这轮）加 `previous_response_id`（上一轮响应的 id），OpenAI 在后端把上下文串起来，只为增量付费。
+
+```python
+from openai import OpenAI
+client = OpenAI()
+
+# 第一轮
+r1 = client.responses.create(
+    model="gpt-6-astra",
+    instructions="你是一个守规矩的运维 agent，只做授权范围内的操作。",
+    input="把 /var/log 里大于 10MB 的日志列出来",
+)
+print(r1.output_text)
+
+# 第二轮：只带新输入 + 上一轮 id，不用重发历史
+r2 = client.responses.create(
+    model="gpt-6-astra",
+    input="把第一个压缩一下",
+    previous_response_id=r1.id,   # 服务端恢复上下文
+)
+```
+
+`response.id` 就是下一轮的 `previous_response_id`。注意：要链式续写，上一轮 background 任务必须已经 `completed`，拿 `in_progress` 的 id 当 `previous_response_id` 会报错。
+
+## 工具调用：同步 → 异步
+
+这是迁移里最值得改的一处，也是 Astra 跑长任务效率的来源。Chat Completions 的工具调用是同步的：模型发调用 → 你跑工具 → 把结果塞回 → 模型继续，全程阻塞。Responses API 支持 `async: true`，模型发完调用不阻塞，继续推进其他独立工作，工具结果好了再用 `call_id` 匹配喂回。
+
+官方异步工具的定义长这样（摘自 OpenAI 异步工具调用指南）：
+
+```python
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "读取某城市的天气快照",
+    "async": True,          # 关键：让模型发完调用就继续，不等结果
+    "strict": True,
+    "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    },
+}]
+
+resp = client.responses.create(model="gpt-6-astra", tools=tools, input="查巴黎天气，同时列三条通用旅行必备")
+call = next(i for i in resp.output if i.type == "function_call")
+
+# 模型此刻可能已经继续干别的了；你的应用去跑工具
+result = get_weather(json.loads(call.arguments)["city"])
+
+# 结果好了，用原始 call_id 匹配，喂回下一轮
+resp2 = client.responses.create(
+    model="gpt-6-astra",
+    tools=tools,
+    previous_response_id=resp.id,
+    input=[{
+        "type": "function_call_output",
+        "call_id": call.call_id,     # 用 call_id 把结果对回那次调用
+        "output": json.dumps(result),
+    }],
+)
+```
+
+两个易错点：`call_id` 是匹配键，别自己造；异步工具的「执行」仍在你这边，OpenAI 不替你管后台进程——它只让模型不阻塞。如果你想要「响应生成本身」在后台跑（避免 HTTP 超时），那是另一个开关 `background: true`，下面说。
+
+## 长任务：background 模式 + 轮询
+
+当一个任务可能跑几分钟（长文生成、大文件分析、多步 agent），用 `background: true` 让响应在后台生成，立即拿到一个 id 去轮询，不用一直挂着连接：
+
+```python
+resp = client.responses.create(
+    model="gpt-6-astra",
+    input="读这份 500 页报告，给出完整摘要",
+    background=True,
+)
+print(resp.status)   # "in_progress"
+
+while resp.status in {"queued", "in_progress"}:
+    time.sleep(3)
+    resp = client.responses.retrieve(resp.id)
+print(resp.output_text)
+```
+
+注意 retention：background 请求默认约 10 分钟后删除，要长期留存得显式 `store=True`。生产环境建议配合 Webhook 回调，别靠死轮询。
+
+## 电脑操作：shell tool + 容器
+
+Astra 的 Computer Use 在工程上对应 OpenAI 的「computer environment」——shell tool 加一个托管容器工作区。模型提议命令，平台在隔离容器里跑，带文件系统、可选 SQLite、受限网络。官方说明里几个对 agent 开发很实用的设计：
+
+- **并发执行**：模型一轮可以发多条 shell 命令，API 用独立容器会话并发跑，再把各自的输出多路复用回上下文。
+- **输出截断**：命令输出太大时，模型可以指定每条命令的输出上限，API 保留头尾、标记中间省略，既控 context 又保信号。
+- **上下文压实（compaction）**：窗口快满时自动压缩历史，不用你手写摘要逻辑。
+
+这意味着你不用自己造一个「模型提命令、我执行、结果喂回」的编排器——Responses API 配托管工具，这个 loop 开箱就有。但你仍要决定网络出口开多大、文件系统挂哪、权限给多少，这些约束还是你的事（呼应上篇「约束面更值钱」）。
+
+## 中途干预与切推理强度
+
+这两个是 Astra 在 Responses API 里新增的实时控制，值得单列：
+
+**Mid-turn steering（中途干预）**：响应进行中，你可以 over WebSocket 推一条新 `input`，模型当场把方向改过来——比如它正填表填到一半，你发现该先验证登录，直接发「改成先验证登录再填表」。适合人在回路的长任务。
+
+**对话中切推理强度**：难的步骤把 reasoning effort 调高，常规步骤调低，且保留缓存的 prompt 前缀（调低不丢缓存）。这是 Astra 上替代 `temperature` 来控制「想多久」的旋钮。
+
+这两项的具体 SDK 写法（WebSocket 流里发中途输入、设 reasoning effort）以官方文档为准，因为接口较新、我这里不给你拍脑袋的代码。我给的判断是：**长任务一定要用上 mid-turn steering 做人工兜底，否则模型一口气推进几十步你只能看最终结果**——这点正好接上安全那篇「监控从 CoT 移到行为层、长任务切检查点」的建议。
+
+## 一个完整迁移对照
+
+把常见 agent loop 从 Chat Completions 搬到 Responses，骨架变化大概是这样：
+
+```python
+# 旧：Chat Completions，每轮重发全量历史 + 同步工具
+messages = [{"role": "system", "content": SYS}]
+while True:
+    messages.append({"role": "user", "content": user_input})
+    resp = client.chat.completions.create(model="gpt-5.6-sol", tools=TOOLS, messages=messages)
+    if resp.choices[0].message.tool_calls:
+        for tc in resp.choices[0].message.tool_calls:
+            messages.append(run_tool(tc))   # 同步阻塞
+    else:
+        break
+
+# 新：Responses，previous_response_id 链式 + 异步工具 + reasoning effort
+last_id = None
+while True:
+    resp = client.responses.create(
+        model="gpt-6-astra",
+        instructions=SYS,
+        input=user_input,
+        previous_response_id=last_id,         # 不重发历史
+        tools=[{**t, "async": True} for t in TOOLS],
+        reasoning={"effort": "medium"},       # 替代 temperature
+    )
+    last_id = resp.id
+    calls = [i for i in resp.output if i.type == "function_call"]
+    if not calls:
+        break
+    # 异步：把调用挂出去，结果好了用 call_id 喂回下一轮
+    ...
+```
+
+差别不在行数，在「状态归谁管」：Chat Completions 状态在你手里（messages 数组），Responses 状态在服务端（`previous_response_id`），你只管增量和工具执行。
+
+## 避坑清单
+
+1. **`previous_response_id` 必须来自 `completed` 的响应。** background 任务没跑完就拿来续写会报错。
+2. **异步工具的「后台执行」是你自己的事。** `async: true` 只是让模型不阻塞，进程调度、超时、取消还是你管；「响应生成后台跑」是 `background: true`，两回事。
+3. **`store` 与 retention。** 要长期留存响应显式 `store=True`，否则 background 响应约 10 分钟消失。
+4. **定制采样没了。** 依赖 `temperature` 做多样性/可复现的实验，Astra 上得改成调 reasoning effort，行为不完全等价，别假设一致。
+5. **成本计价变了。** 异步 + 长任务下 token 消耗更难预估，上线前用 `client.responses.input_tokens.count()` 先估输入量，再算端到端 ROI（这点下篇成本账会展开）。
+
+## 总结
+
+迁到 Responses 不是跟风，是用 Astra 当 agent 的硬门槛。核心就三件事：把 `messages` 换成 `input` + `previous_response_id`（状态上交服务端）、把同步工具改成 `async: true` + `call_id`（模型不阻塞）、把长任务交给 `background` + 轮询。电脑操作走 shell tool 托管容器，中途干预和推理强度是新增的实时控制旋钮。
+
+迁完你会发现，原来 harness 里最费劲的「编排 loop」「上下文管理」「并发工具」三块，OpenAI 替你兜底了——剩下要你操心的，还是那句老话：沙箱、权限、监控。模型把执行层吃进去了，约束层一个没少。
+
+---
+
+*参考：OpenAI 开发者文档 Responses API 指南（async-tool-calling / background / computer environment）、GPT-6 Astra Changelog（2026-09-03）。代码示例基于官方文档写法，mid-turn steering 与 reasoning effort 的确切 SDK 接口以官方最新文档为准。*
