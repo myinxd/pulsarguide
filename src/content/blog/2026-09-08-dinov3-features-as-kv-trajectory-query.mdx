@@ -1,0 +1,103 @@
+---
+title: "轨迹当 query、场景当 KV：DINOv3 特征是怎么接进轨迹预测模型的"
+description: "前几篇都在说 DINOv3 该不该冻、冻了多强，这篇回答一个更基础的问题：冻结完的特征，到底以什么形态喂给规划头？答案是 Transformer 解码器式的接口——轨迹当 query、场景特征当 KV。但「直接当 KV」和「随机加噪」两个直觉，跟论文里的真实机制都有出入。"
+pubDate: 2026-09-08
+tags:
+  - DINOv3
+  - End-to-End
+  - Autonomous Driving
+  - DiffusionDrive
+  - Transformer
+---
+
+# 轨迹当 query、场景当 KV：DINOv3 特征是怎么接进轨迹预测模型的
+
+> DINOv3 系列写到第四篇了：[The Constant Eye](/blog/posts/2026-09-03-constant-eye-dinov3-ood-planning/) 说冻结它能把 OOD 性能下降从 40% 压到 3%，[全景篇](/blog/posts/2026-09-03-dinov3-autonomous-driving-full-picture/) 说它的特征能当 Sim-to-Real 桥，[运动盲区篇](/blog/posts/2026-09-08-dinov3-motion-blindspot/) 说它没时间维度、时序要外接。但有一个最基础的问题一直没正面回答：**冻结完的特征，到底以什么形态喂给规划头？** 是直接拼进网络当输入，还是当注意力里的 key/value，还是另有翻译层？这篇把接口解剖开——顺便验证一个很自然的猜想：特征当 KV、带噪的轨迹 anchors 当 query 去做 attention。方向是对的，但论文里的真实机制比这个直觉多了三层讲究。
+
+---
+
+## 先回答那个具体问题：是，但不「直接」
+
+「DINOv3 特征作为 key/value，跟轨迹 query 做 cross-attention」——这个机制真实存在，而且正是当下端到端规划的主流接口形态。The Constant Eye 论文（arXiv:2602.12563）的 IV 节公开了完整细节：他们把冻结 DINOv3 的特征接进了三种规划范式（回归式 LTF、扩散式 DiffusionDrive、评分式 GTRS-Dense），三种范式共享同一个接口设计。
+
+但有两个地方跟直觉不一样。
+
+第一，「直接当 KV」不成立——原始特征要先过一层适配器（adapter）翻译。第二，「随机加噪的轨迹」不准确——扩散式路线里的轨迹 query 是从 **anchored Gaussian distribution**（锚定高斯分布）采样的，加噪起点不是纯随机噪声，而是 20 个聚类出来的「常见驾驶模式」anchor 附近。这两个偏差分别对应接口设计里两个最关键的决策：**特征怎么降维对齐，query 从哪来**。
+
+## 为什么 DINOv3 特征不能裸着当 KV
+
+先看特征侧。DINOv3 的 ViT 输出是一个特征网格 F_DINO ∈ R^(H'×W'×C)，其中 C 是通道维度——大模型的 C 可以到 768 甚至几千。直接拿这个当 KV 有三个问题：
+
+一是维度太高，注意力算力跟 C 成正比，规划头扛不住；二是网格特征缺少规划任务需要的空间归纳偏置——它是一张「图」，但下游要的是「哪里可走、哪里该让」的结构化信息；三是 backbone 的特征分布跟下游任务头没对齐过，裸接容易让训练不稳定。
+
+The Constant Eye 的解法是一个轻量适配器 A，两步走：
+
+第一步，MLP 把特征网格投影到低维空间 F_MLP ∈ R^(H'×W'×d)，d < C，把通道维度压下来。第二步，过一个 CNN 空间聚合器——结构是先上采样再下采样：先提高空间分辨率，让模型能支撑 BEV 语义分割这类辅助感知任务（保住细粒度结构边界），再下采样回原尺寸。最后把处理完的特征网格 flatten 成 token 序列：
+
+```
+z = Flatten(F_ada) ∈ R^(N×d)，其中 N = H' × W'
+```
+
+**这个 z 才是真正当 key/value 用的东西。** 它跟下游 Transformer 规划解码器在结构上完全兼容。整个训练过程中 DINOv3 backbone 严格冻结、零梯度更新，只有适配器和规划头在学——这正是 The Constant Eye 消融里「冻结比端到端微调 OOD 更鲁棒」结论的来源。
+
+还有个细节值得注意：虽然三种范式共享同一个适配器架构，但**每个规划头都用独立、不共享的适配器实例**——因为回归、扩散、评分三种任务对特征的要求不同，各训各的翻译层，互不污染。
+
+## 范式一：回归式——一个 ego-query 问全场
+
+接口最干净的是回归式 LTF-DINO。LTF（Learning to Forecast，回归式模仿学习范式）的规划头是一个 Transformer 解码器，里面有两组可学习 query token：
+
+- **ego-query**：代表自车，负责聚合场景信息、产出最终轨迹；
+- **agent queries**：一组代表周围车辆/障碍物的 query，用于 DETR 式的 3D 目标检测——提供多任务监督信号。
+
+ego-query 通过 cross-attention 跟适配后的 DINOv3 特征 z 交互——**q_ego 当 query，z 当 key 和 value**——聚合完场景上下文后，交给 MLP 回归出确定性轨迹：
+
+```
+T = {w_1, ..., w_T} = f_reg(CrossAttn(q_ego, z), s)
+```
+
+这里 s 是自车状态。整个形态就是 DETR 哲学的直系后裔：一个可学习的「问句」去注意力池化整个场景，然后解码成答案。单 query 意味着单模态输出——一条轨迹，快、稳，但遇到「路口左转还是直行都合理」这种多模态场景就只会给一个平均解。
+
+## 范式二：扩散式——20 个带噪 anchor 当 query
+
+多模态的问题，DiffusionDrive（arXiv:2411.15139，CVPR 2025 Highlight，华科+地平线）用扩散模型来解决。它跟 The Constant Eye 的结合体叫 DiffusionDrive-DINO：感知骨干换成冻结 DINOv3 + 适配器接口，规划头沿用 DiffusionDrive 的截断扩散策略。
+
+它的 query 侧设计是整个机制最精妙的地方。先看 vanilla diffusion policy 的两个毛病：一是要 20 步去噪才能出轨迹，实时性不达标（TransfuserDP 只能跑 7 FPS）；二是从不同纯高斯噪声出发的轨迹严重重叠——模态坍缩，说好的多样性没了，几条轨迹长得差不多。
+
+DiffusionDrive 的核心洞察是：**人类驾驶不是从纯噪声里凭空想出来的，而是先有常见的驾驶模式（直行、跟车、左转、变道），再根据实时路况微调。** 所以它把「常见模式」直接编码进扩散过程的起点：
+
+1. 训练时用 K-Means 对人类驾驶轨迹聚类，得到 **20 个 anchor 轨迹**——注意对比 VADv2 那种 4096~8192 个固定锚点的离散词表方案，20 个是约 400 倍的缩小，而且 anchor 只是去噪起点不是分类候选集；
+2. 每个 anchor 周围加少量高斯噪声，形成锚定高斯分布——带噪轨迹 τ_k^i = √ᾱᵢ·a_k + √(1-ᾱᵢ)·ε，其中 a_k 是第 k 个 anchor；
+3. 扩散时间表被截断（只跑 50/1000），模型只需要学「从 anchor 附近去噪到真实轨迹」这一段，不用从零学整个噪声到数据的映射。
+
+效果是推理从 20 步砍到 **2 步**（10 倍加速），在 NVIDIA 4090 上跑 45 FPS，NAVSIM 基准 88.1 PDMS 刷新纪录，还拿到了比 vanilla diffusion 高 64% 的模式多样性分数。每个 anchor 同时预测一个分类分数和一条去噪轨迹，最后取分数最高的作为输出。推理时采样的轨迹数量还可以动态调，不必等于训练时的 20。
+
+那带噪轨迹是怎么跟 DINOv3 特征交互的？DiffusionDrive 的级联扩散解码器（cascade diffusion decoder）是 Transformer 架构（替代 UNet），每一层做两步 cross-attention：
+
+- 第一步 **deformable spatial cross-attention**：基于轨迹坐标作为参考点，去 BEV/PV 特征里查对应空间区域——不是全局注意力，是按轨迹点位置查局部，省算力且空间对齐；
+- 第二步跟感知模块输出的 **agent/map queries** 交互，把周围车辆和地图结构的信息揉进轨迹。
+
+中间还有一层 Timestep Modulation 把「当前去噪到第几步」编码进去——同一个解码器在不同去噪步上要干不同的活（早期大步去噪、后期精修），得告诉它现在是哪一步。级联多层解码器逐层精修轨迹重建，参数跨去噪步共享，整个解码器从 102M 压到 60M。
+
+## 为什么「轨迹当 query、场景当 KV」是自然设计
+
+把两种范式放在一起看，接口哲学其实是一致的，可以抽象成一句话：
+
+**query 表达「我想知道什么」，KV 表达「场景里有什么」。**
+
+轨迹天然是 query——它带着「我要往哪去」的意图，去场景里找答案：这条路能不能走、会不会撞上谁、要不要让。场景特征天然是 KV——它被动地回答 query 的查询，不主动决定去向。这个分工跟 DETR 的 object query 是同一个思想：可学习的问句在特征图上做内容寻址，而不是把整张特征图暴力灌进全连接层。
+
+DINOv3 在这个故事里的角色，是**把 KV 的来源换成了更干净的自监督特征**。The Constant Eye 的动机实验显示：传统 CNN 骨干（VoVNet）的特征在外观域偏移下（大雪、黄昏）PCA 投影变化剧烈，而 DINOv3 的 token 跨域聚成 tight clusters——KV 更稳，query 问出来的答案自然更稳。这正是它 OOD 不掉点的机制解释：不是规划头变强了，是它读到的那本「场景之书」不再因外观变化而改写内容。
+
+适配器则是让两个世界对齐的翻译层：一边是 ViT 的高维 patch 特征（以像素网格为单位思考），一边是规划头的低维 token 序列（以场景语义为单位思考），MLP 降维 + CNN 空间聚合就是中间的翻译官。翻译层该多厚、该不该每个任务独立——这些是接口设计里真正花掉 ablation 的地方。
+
+## 所以：接口先于能力
+
+回看整个系列，一条隐含的线其实是：**先想清楚接口，再谈能力。**
+
+The Constant Eye 证明 DINOv3 能当通用感知接口，靠的是把「冻结」变成设计约束而不是偷懒；DiffusionDrive 证明扩散能实时上车，靠的是把「常见驾驶模式」变成去噪起点而不是让模型从零摸索。运动盲区篇说时序要外接——外接的机制（光流 warp、latent cross-correlation、世界模型）本质上也是在设计新的接口，让冻结特征跟时间维度对齐。谁冻谁训、边界画在哪、query 从哪来、KV 怎么翻译——这些接口决策，决定了模型能力能不能兑现成驾驶表现。
+
+这跟 [agent 专栏「壳 vs 模型」那个系列](/agent/posts/2026-09-04-harness-same-model-compared/) 是同一个结构问题，只是换了领域：基础模型再强，跟具体任务之间永远隔着一层接口设计。接口的巧拙，往往比模型本身更能拉开差距。
+
+---
+
+*论文：The Constant Eye (arXiv:2602.12563)；DiffusionDrive: Truncated Diffusion Model for End-to-End Autonomous Driving (arXiv:2411.15139, CVPR 2025)；DINOv3 (arXiv:2508.10104)*
