@@ -1,0 +1,149 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = (await getCollection('blog')).filter((post) => !post.data.draft && post.data.series);
+  const seriesMap = new Map();
+  for (const post of posts) {
+    const key = post.data.series.key;
+    if (!seriesMap.has(key)) {
+      seriesMap.set(key, {
+        key,
+        title: post.data.series.title,
+        posts: [],
+      });
+    }
+    seriesMap.get(key).posts.push(post);
+  }
+  return Array.from(seriesMap.values()).map((s) => ({
+    params: { key: s.key },
+    props: {
+      seriesTitle: s.title,
+      seriesPosts: s.posts.sort((a, b) => a.data.series.order - b.data.series.order),
+    },
+  }));
+}
+
+const { key } = Astro.params;
+const { seriesTitle, seriesPosts } = Astro.props;
+---
+
+<Layout title={seriesTitle} description={`「${seriesTitle}」系列文章`}>
+  <section class="page-header">
+    <h1>📚 {seriesTitle}</h1>
+    <p>系列文章 · 共 {seriesPosts.length} 篇，按阅读顺序排列</p>
+  </section>
+
+  <section class="post-list">
+    {
+      seriesPosts.map((post, index) => (
+        <article class="post-card">
+          <a href={`/blog/posts/${post.id}`} class="post-link">
+            <div class="post-meta">
+              <span class="series-index">第 {index + 1} 篇</span>
+              <time datetime={post.data.pubDate.toISOString()}>
+                {post.data.pubDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })}
+              </time>
+              <div class="post-tags">
+                {post.data.tags.map((tag) => <span class="tag">{tag}</span>)}
+              </div>
+            </div>
+            <h2 class="post-title">{post.data.title}</h2>
+            <p class="post-desc">{post.data.description}</p>
+          </a>
+        </article>
+      ))
+    }
+  </section>
+</Layout>
+
+<style>
+  .page-header {
+    padding: 3rem 0 2rem;
+  }
+  .page-header h1 {
+    margin: 0;
+    font-size: 1.8rem;
+  }
+  .page-header p {
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+  }
+
+  .post-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-bottom: 4rem;
+  }
+
+  .post-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    transition: all 0.2s;
+  }
+  .post-card:hover {
+    border-color: rgba(6, 182, 212, 0.3);
+    background: transparent;
+  }
+
+  .post-link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .post-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+  }
+
+  .series-index {
+    background: rgba(6, 182, 212, 0.12);
+    border: 1px solid rgba(6, 182, 212, 0.25);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: var(--accent-2, #0891b2);
+    font-weight: 600;
+  }
+
+  .post-tags {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .tag {
+    background: rgba(124, 58, 237, 0.1);
+    border: 1px solid rgba(124, 58, 237, 0.2);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: var(--accent-1);
+  }
+
+  .post-title {
+    margin: 0 0 0.5rem;
+    font-size: 1.2rem;
+    color: var(--text-primary);
+    transition: color 0.2s;
+  }
+  .post-card:hover .post-title {
+    color: var(--accent-2);
+  }
+
+  .post-desc {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin: 0;
+    line-height: 1.5;
+  }
+</style>

@@ -12,6 +12,22 @@ export async function getStaticPaths() {
 
 const { post } = Astro.props;
 const { Content } = await render(post);
+
+// 系列导航：仅当文章属于某个系列时计算上篇/下篇
+let seriesNav = null;
+if (post.data.series) {
+  const { key } = post.data.series;
+  const siblings = (await getCollection('blog'))
+    .filter((p) => !p.data.draft && p.data.series && p.data.series.key === key)
+    .sort((a, b) => a.data.series.order - b.data.series.order);
+  const idx = siblings.findIndex((p) => p.id === post.id);
+  seriesNav = {
+    title: post.data.series.title,
+    key,
+    prev: idx > 0 ? siblings[idx - 1] : null,
+    next: idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null,
+  };
+}
 ---
 
 <Layout title={post.data.title} description={post.data.description}>
@@ -37,6 +53,34 @@ const { Content } = await render(post);
     <div class="content-body">
       <Content />
     </div>
+
+    {
+      seriesNav && (
+        <nav class="series-nav">
+          <a href={`/blog/series/${seriesNav.key}`} class="series-nav-title">
+            📚 {seriesNav.title}
+          </a>
+          <div class="series-nav-links">
+            {seriesNav.prev ? (
+              <a href={`/blog/posts/${seriesNav.prev.id}`} class="series-nav-item series-nav-prev">
+                <span class="series-nav-label">← 上一篇</span>
+                <span class="series-nav-post">{seriesNav.prev.data.title}</span>
+              </a>
+            ) : (
+              <span class="series-nav-item series-nav-placeholder"></span>
+            )}
+            {seriesNav.next ? (
+              <a href={`/blog/posts/${seriesNav.next.id}`} class="series-nav-item series-nav-next">
+                <span class="series-nav-label">下一篇 →</span>
+                <span class="series-nav-post">{seriesNav.next.data.title}</span>
+              </a>
+            ) : (
+              <span class="series-nav-item series-nav-placeholder"></span>
+            )}
+          </div>
+        </nav>
+      )
+    }
   </article>
 </Layout>
 
@@ -87,6 +131,64 @@ const { Content } = await render(post);
   }
 
   .content-body {
-    padding-bottom: 4rem;
+    padding-bottom: 2rem;
+  }
+
+  .series-nav {
+    margin-top: 1rem;
+    padding: 1.2rem 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-card);
+  }
+
+  .series-nav-title {
+    display: inline-block;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    margin-bottom: 0.8rem;
+    font-size: 0.95rem;
+  }
+  .series-nav-title:hover {
+    color: var(--accent-2);
+  }
+
+  .series-nav-links {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .series-nav-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    text-decoration: none;
+    max-width: 48%;
+  }
+
+  .series-nav-placeholder {
+    max-width: 48%;
+  }
+
+  .series-nav-next {
+    text-align: right;
+    align-items: flex-end;
+  }
+
+  .series-nav-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .series-nav-post {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .series-nav-item:hover .series-nav-post {
+    color: var(--accent-2);
   }
 </style>

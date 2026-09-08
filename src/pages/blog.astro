@@ -5,6 +5,15 @@ import { getCollection } from 'astro:content';
 const posts = (await getCollection('blog'))
   .filter((post) => !post.data.draft)
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+// 收集所有系列（每个系列只出现一次）
+const seriesMap = new Map();
+for (const post of posts) {
+  if (post.data.series && !seriesMap.has(post.data.series.key)) {
+    seriesMap.set(post.data.series.key, post.data.series);
+  }
+}
+const seriesList = Array.from(seriesMap.values());
 ---
 
 <Layout title="文章" description="自动驾驶技术文章和工程实践分享">
@@ -12,6 +21,18 @@ const posts = (await getCollection('blog'))
     <h1>📝 所有文章</h1>
     <p>自动驾驶算法、工程实践与经验思考</p>
   </section>
+
+  {
+    seriesList.length > 0 && (
+      <section class="series-entry">
+        {seriesList.map((s) => (
+          <a href={`/blog/series/${s.key}`} class="series-entry-link">
+            📚 {s.title} <span class="series-entry-arrow">→</span>
+          </a>
+        ))}
+      </section>
+    )
+  }
 
   <section class="post-list">
     {
@@ -59,6 +80,34 @@ const posts = (await getCollection('blog'))
     flex-direction: column;
     gap: 0.5rem;
     padding-bottom: 4rem;
+  }
+
+  .series-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-bottom: 1.5rem;
+  }
+
+  .series-entry-link {
+    display: block;
+    background: rgba(6, 182, 212, 0.08);
+    border: 1px solid rgba(6, 182, 212, 0.25);
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    text-decoration: none;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: all 0.2s;
+  }
+  .series-entry-link:hover {
+    border-color: rgba(6, 182, 212, 0.5);
+    background: rgba(6, 182, 212, 0.12);
+  }
+
+  .series-entry-arrow {
+    color: var(--accent-2);
   }
 
   .post-card {
