@@ -14,8 +14,6 @@ series:
   order: 4
 ---
 
-# 轨迹当 query、场景当 KV：DINOv3 特征是怎么接进轨迹预测模型的
-
 > DINOv3 系列写到第四篇了：[The Constant Eye](/blog/posts/2026-09-03-constant-eye-dinov3-ood-planning/) 说冻结它能把 OOD 性能下降从 40% 压到 3%，[全景篇](/blog/posts/2026-09-03-dinov3-autonomous-driving-full-picture/) 说它的特征能当 Sim-to-Real 桥，[运动盲区篇](/blog/posts/2026-09-08-dinov3-motion-blindspot/) 说它没时间维度、时序要外接。但有一个最基础的问题一直没正面回答：**冻结完的特征，到底以什么形态喂给规划头？** 是直接拼进网络当输入，还是当注意力里的 key/value，还是另有翻译层？这篇把接口解剖开——顺便验证一个很自然的猜想：特征当 KV、带噪的轨迹 anchors 当 query 去做 attention。方向是对的，但论文里的真实机制比这个直觉多了三层讲究。
 
 ---

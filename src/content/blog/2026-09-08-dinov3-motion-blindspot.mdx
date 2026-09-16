@@ -14,8 +14,6 @@ series:
   order: 3
 ---
 
-# DINOv3 的运动盲区：冻结编码器看得清世界，却看不懂「动起来」
-
 > 前两篇写 DINOv3 上车，都在说它多能打：[The Constant Eye](/blog/posts/2026-09-03-constant-eye-dinov3-ood-planning/) 证明冻结编码器能把 OOD 性能下降从 40% 压到 3%，[DwD](/blog/posts/2026-09-03-dinov3-autonomous-driving-full-picture/) 证明它的特征能当 Sim-to-Real 的结构桥接。这篇要泼一盆冷水——DINOv3 有一个先天的盲区：**它逐帧处理图像，没有时间维度。** 语义和几何它都懂，但「前车在减速」「行人要横穿」这种运动问题，恰恰是它最不擅长的。这个短板怎么补，决定了 DINOv3 在一段式端到端里到底该冻在哪一层。
 
 ---

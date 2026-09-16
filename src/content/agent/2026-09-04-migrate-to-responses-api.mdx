@@ -11,8 +11,6 @@ tags:
   - Tool Calling
 ---
 
-# 把 agent 从 Chat Completions 迁到 Responses：GPT-6 Astra 逼你走的一步
-
 > [上篇写了 Astra 把 harness 的执行层收进了模型](/agent/posts/2026-09-04-gpt-6-astra-model-eats-harness/)，其中提到一个硬约束：Astra 的工具调用必须走 Responses API，老的 Chat Completions 不支持工具，也不支持自定义 temperature / top_p / logprobs，连 `none` 推理档都没有。这篇不聊观点，聊怎么动手迁。如果你手上的 agent 还跑在 Chat Completions 上，Astra 上线等于给你下了最后通牒。下面是把一个真实 agent 迁过去会碰到的每一步。
 
 ---
