@@ -7,3 +7,9 @@ dist/
 
 # Astro build cache (generated, do not track)
 .astro/
+
+# AI assistant working files
+.workbuddy/
+
+# AI assistant working files
+.workbuddy/
