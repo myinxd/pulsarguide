@@ -1,0 +1,145 @@
+---
+title: "从一千步到两步：DDIM 跳步与轻量 decoder 如何把扩散模型搬上车"
+description: "DDPM 为什么慢、DDIM 怎么靠跳步把采样从一千步压到几十步，以及 DiffusionDrive 如何用「锚点截断 + 轻量 decoder」把扩散规划器搬上车、压进板端实时预算。附 DDPM/DDIM 最小公式对照，以及它和 Flow Matching、国产智驾芯片两条线的串联。"
+pubDate: 2026-10-02
+tags:
+  - DDPM
+  - DDIM
+  - Diffusion Model
+  - DiffusionDrive
+  - Autonomous Driving
+  - Edge Deployment
+  - Model Acceleration
+---
+
+> [上篇](/blog/posts/2026-09-24-flow-matching-explained/)把 Flow Matching 和扩散的关系讲清楚了：扩散本质是在解一条弯的 ODE，Flow Matching 想办法把路拉直、一步出结果。但有个现实问题那篇没展开——**车端根本等不起那上千步。** 而[更早那篇](/blog/posts/2026-09-24-goalflow-guideflow-flow-matching-vs-diffusion/)提到 DiffusionDrive 时留了个细节：它靠「锚点高斯 + 截断 schedule」把去噪压到 2 步，才让扩散规划器跑到 45 FPS。本篇把这条线补全：先说清 DDPM 为什么慢，再说 DDIM 怎么靠跳步把一千步砍到几十步，最后落到 DiffusionDrive——它如何用「减步数」和「减 decoder」两个杠杆，把扩散模型真正搬上车、塞进板端的实时预算。最后还会和[国产智驾芯片那篇](/blog/posts/2026-09-28-domestic-autonomous-driving-chips-2026/)串一下：算法侧每砍一步，等效需要的 TOPS 就掉一截。
+
+## 1. 引子：扩散上车的两道坎
+
+讲扩散模型，图像圈的人第一反应是「慢」。但「慢」放到车端，性质就变了——从体验问题变成能不能上车的生死问题。
+
+板端要扛住扩散，其实是两道坎叠在一起：
+
+第一道坎是**步数**。标准 DDPM 要从纯噪声出发，沿一条弯的路径一步一步去噪，T 默认 1000。规划模块每 100ms 就得重算一次轨迹，上千步的顺序 U-Net 调用直接把实时预算烧穿。
+
+第二道坎是**每步的重量**。扩散的 decoder（一般是 U-Net 或 DiT）不是调一次就完事——它要在**每一个去噪步**都被调一遍。decoder 本身多大、有几层，会随步数**乘**到总延迟上。所以「总算力 ≈ 单步 decoder 成本 × 步数」这个等式，才是板端账单的真正写法。
+
+DDIM 解决第一道坎，DiffusionDrive 把两道坎一起削。这篇就顺着这两条线走。
+
+## 2. DDPM：慢，是写在结构里的
+
+DDPM（Ho et al., 2020）定义了一个前向加噪过程：把数据 x₀ 逐步加高斯噪声，T 步之后近似成纯噪声。它巧妙的地方是加噪有闭式解，训练时不用真的走完 T 步：
+
+```
+x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * eps,   eps ~ N(0, I)
+```
+
+其中 alpha_t = 1 - beta_t，alpha_bar_t 是前 t 个 alpha_s 的连乘（alpha_bar_t = ∏ₛ αₛ），beta_t 是预设的噪声表（线性从 1e-4 到 0.02，后来也有 cosine schedule）。
+
+训练目标被简化成一个非常干净的形式——让 U-Net 直接预测加进去的那团噪声：
+
+```
+L_simple = E_{t, x_0, eps} || eps - eps_theta( sqrt(alpha_bar_t) x_0 + sqrt(1-alpha_bar_t) eps, t ) ||^2
+```
+
+采样时反过来走，每一步用网络预测的噪声把 x_t 往回推一步，并且**重新注入随机噪声** z（这就是「祖先采样」，ancestral sampling）：
+
+```
+x_{t-1} = (1/sqrt(alpha_t)) * ( x_t - (beta_t / sqrt(1-alpha_bar_t)) * eps_theta(x_t, t) )
+          + sigma_t * z,   z ~ N(0, I)
+```
+
+关键就在最后那个 z。它让每一步都带随机性，所以**同一个初始噪声，每次采样出来的图都不一样**；也正因为要一步步重新随机、一步步修正，T=1000 步几乎是必须的——少走几步，分布就明显偏离。这就是慢的结构性根源。
+
+## 3. DDIM：跳步是怎么做到的
+
+DDIM（Song, Meng, Ermon, 2020，ICLR 2021）的核心洞察一句话：**前向过程不必是马尔可夫的，只要每一步的边际分布 q(x_t | x₀) 和 DDPM 完全一致，反向就能重写成一个确定性过程。**
+
+因为只约束边际，DDIM 把反向步重写成下面这个形式（x_hat_0 是网络从 x_t 反推出来的「干净样本」估计）：
+
+```
+x_hat_0 = ( x_t - sqrt(1 - alpha_bar_t) * eps_theta(x_t, t) ) / sqrt(alpha_bar_t)
+
+x_{t-1} = sqrt(alpha_bar_{t-1}) * x_hat_0
+         + sqrt(1 - alpha_bar_{t-1} - sigma_t^2) * eps_theta(x_t, t)
+         + sigma_t * z
+```
+
+注意这里多了一个 sigma_t，它由一个叫 eta（η）的旋钮控制：
+
+```
+sigma_t = eta * sqrt( (1-alpha_bar_{t-1}) / (1-alpha_bar_t) ) * sqrt(1 - alpha_bar_t / alpha_bar_{t-1})
+```
+
+- η = 0：sigma_t = 0，最后一项消失，整个更新**完全确定**——同一个 x_T 必得同一个 x₀；
+- η = 1：sigma_t 退回到 DDPM 的后验方差，整个采样重新变回随机的 DDPM。
+
+也就是说，η 在「确定性」和「DDPM 随机性」之间是一条连续谱，而 DDPM 只是 η=1 这个特例。
+
+确定性带来的最大好处是**跳步**。因为过程不再依赖逐步的随机转移，我们可以只挑一个 T 的子序列 τ = (τ₁, …, τ_S) 来执行更新，S 远小于 T——比如从 1000 里均匀挑 50 步。网络只在被选中的时间步被调用，没选中的中间步直接跳过：
+
+```
+for i in reversed(range(S)):
+    x = ddim_step(x, tau[i], eta=0)   # 只走 S 步
+```
+
+论文和后续实践都表明，50 步 DDIM 的 FID 和 1000 步 DDPM 几乎在一个量级（差距 5% 以内），10 步开始明显退化。**最重要的是：跳步不需要重训，只换采样器。** 同一个训练好的 U-Net，DDPM 采样器走 1000 步，DDIM 采样器走 50 步，权重一字不动。
+
+顺带提一句，确定性也让 DDIM 有了 DDPM 没有的能力：同一个潜变量进出是可复现的，于是能做潜空间插值和图像反转（把真实图反推回噪声再编辑）。这是图像圈的甜点，但本篇重点是它砍延迟的那一面。
+
+## 4. DDPM vs DDIM：一张对照表
+
+| 维度 | DDPM | DDIM |
+|------|------|------|
+| 过程类型 | 随机、马尔可夫 | 确定性（η=0）或非马尔可夫 |
+| 采样步数 | 1000（典型） | 10–200，常用 50 |
+| 每步是否加随机噪声 | 是 | η>0 才加，η=0 不加 |
+| 同噪声是否同结果 | 否 | 是（η=0） |
+| 是否需要重训 | — | 否，仅换采样器 |
+| 潜空间插值/反转 | 不支持 | 支持 |
+| 典型加速 | 1× | 10–100× |
+
+一句话：DDPM 是地基，DDIM 是在同一块地基上换了一个快得多的电梯。
+
+## 5. DiffusionDrive：把跳步和轻 decoder 用到极致
+
+DDIM 把步数从 1000 压到 50，但放到车端还是不够。DiffusionDrive（arXiv:2411.15139，CVPR 2025）把这个思路往前又推了一步，而且**同时削了两道坎**。
+
+先说朴素方案有多惨。论文指出，一个直接用 DDIM 的扩散策略要 20 步去噪才能把随机噪声变成一条可行轨迹，FPS 从基线 60 直接掉到 7——实时性崩了，没法上在线驾驶。
+
+DiffusionDrive 的解法叫**截断扩散（truncated diffusion）**，分两步：
+
+第一步，**换起点**。人类驾驶不是随机噪声，而是几十种固定模式（跟车、变道、避让……）。论文用 K-Means 在训练集上聚出 20 个轨迹锚点，去噪不再从纯高斯出发，而是从「离真值最近的那个锚点附近的高斯」出发。这样起点就已经在目标分布旁边了。
+
+第二步，**截断定步数**。既然起点近，就没必要走完整条 1000 步的噪声表，只保留前 50 步（T_trunc ≪ T），加一点点高斯扰动到锚点上，然后用 DDIM 更新规则**只走 2 步**去噪。结果：45 FPS，NAVSIM navtest 上 PDMS 88.1，比 Transfuser 回归基线高 4.1、比 Hydra-MDP-V8192 高 1.6。有趣的是它**一步推理就已经能拿 87.9 PDMS**（两步 88.1），差距极小——这直接催生了一个工程思路：按场景难度动态调度步数，简单场景 1 步、难场景 2–3 步，把延迟再往下压。
+
+第二道坎——decoder 的重量——DiffusionDrive 也没放过。它点破一个常被忽略的事实：**扩散 decoder 在每个去噪步都要被调一次，所以单步 decoder 的参数量会随步数乘到总延迟上。** 论文把原始的 U-Net 式截断策略换成级联扩散 decoder（cascade diffusion decoder），参数从 102M 压到 60M，PDMS 反而还涨了 2.4。这是和「减步数」并行的另一条杠杆：步数砍到 2，单步 decoder 再砍掉四成参数，板端账单才真正可控。
+
+所以论文真正想说的那句话是：**扩散模型上车的真杠杆 = 步数 × 每步 decoder 成本，两个都得压。** 锚点截断削步数，级联 decoder 削每步重量，缺一不可。
+
+## 6. 和两条线串起来
+
+这条线和本博客另外两篇是通的。
+
+其一是[ Flow Matching 详解](/blog/posts/2026-09-24-flow-matching-explained/)。那篇讲 DDIM 的确定性 ODE 其实是 rectified flow / flow matching 的直系前身——把「确定性 ODE 采样」这条路推到极致，就变成了把路径拉直、一步出结果的 flow matching。GoalFlow 用 flow matching 把噪声到轨迹的路学直，DiffusionDrive 用「锚点 + 截断 + DDIM」把步数压到 2，表面是两条路，底层都是和「弯曲的多步去噪」较劲：一个把路拉直，一个把弯路砍短。
+
+其二是[ 国产智驾芯片 2026](/blog/posts/2026-09-28-domestic-autonomous-driving-chips-2026/)。那篇的核心判断是「TOPS 数字正在变得没那么重要，真正较量是编译器优化 × 内存带宽 × 工具链成熟度的有效算力」。这篇从算法侧给了同一个判断一个注脚：同样一颗硅，扩散步数从 1000 砍到 2、decoder 从 102M 砍到 60M，等效需要的 TOPS 直接掉一个量级。**算法侧的每一步优化，都是板端算力账单上实打实的减免**——这也是为什么车企愿意为「模型上车」付算法团队的工资。
+
+## 7. 总结与边界
+
+把整条线收一下：DDPM 慢是结构性的（随机、逐步、1000 步）；DDIM 用「边际一致即可」的洞察把采样改写成确定性过程，靠 η=0 跳步、靠子序列采样把 1000 步压到 50，且不用重训；DiffusionDrive 再把步数压到 2（锚点截断）、把单步 decoder 压到 60M，让扩散规划器真正跑到车端实时。
+
+但边界要讲清：DDIM 跳步有天花板。10 步以下质量明显退化，复杂分布上 50–250 步才稳。所以 DiffusionDrive 才不是纯靠减步数，而是「起点就靠近目标 + 截断 + 轻 decoder」三件套一起上。步数、质量、延迟是一个三角，得按场景调，没有一刀切的最优步数。
+
+对做板端部署的人来说，真正的 lesson 是：**先砍步数（换采样器、截断、锚点），再砍每步 decoder，最后才谈换更大算力的芯片。** 顺序反了，就是拿硬件成本去填算法的懒。
+
+## 8. 参考资料
+
+- Ho, Jain, Abbeel. Denoising Diffusion Probabilistic Models. arXiv:2006.11239, 2020.
+- Song, Meng, Ermon. Denoising Diffusion Implicit Models. arXiv:2010.02502, ICLR 2021.
+- Xie et al. DiffusionDrive: Truncated Diffusion Model for End-to-End Autonomous Driving. arXiv:2411.15139, CVPR 2025.
+- [Flow Matching 详解：为什么把生成路径拉直，就能一步出结果](/blog/posts/2026-09-24-flow-matching-explained/)（站内）
+- [把弯曲的路拉直：GoalFlow、GuideFlow，与扩散解码器的约束之争](/blog/posts/2026-09-24-goalflow-guideflow-flow-matching-vs-diffusion/)（站内）
+- [国产智驾芯片2026：六强图谱与量产格局](/blog/posts/2026-09-28-domestic-autonomous-driving-chips-2026/)（站内）
+
+> ⚠️ 数据说明：DiffusionDrive 的 FPS（60→7、45）、PDMS（88.1 / 87.9）、decoder 参数（102M→60M）、NAVSIM/navtest 等数字均来自其论文报告；不同 backbone 与评测协议下会有浮动，量产落地请以实车实测为准。DDIM 的 50 步「FID 差距 5% 以内」为通用经验区间，非单一论文结论。
