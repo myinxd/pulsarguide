@@ -1,0 +1,243 @@
+---
+title: "从 NAVSIM 到 Bench2Drive：2026 年端到端自动驾驶评测全景图"
+description: "NAVSIM、nuPlan、Bench2Drive、Waymo E2E、CARLA Leaderboard——五条主流评测线分别测什么、各有什么坑、指标怎么读，附开闭环区别解析和读榜单数字的七个检查点。"
+pubDate: 2026-10-03
+tags:
+  - 自动驾驶
+  - 端到端
+  - Benchmark
+  - NAVSIM
+  - Bench2Drive
+  - nuPlan
+  - Waymo
+  - 评测
+---
+
+> 读端到端自动驾驶论文，最难的不是理解模型架构，而是看懂它那个分数到底说明了什么。一篇论文报「99.6 NC」，另一篇报「97.02 Driving Score」，第三篇说「碰撞率 1.68%」——这三个数字能直接比吗？不能。但很多论文就希望你觉得能。这篇把 2026 年五条主流评测线全部拆开，测什么、各自的坑在哪、指标怎么读，逐一讲清楚。
+
+## 1. 先搞清开闭环：这是评测的根
+
+所有榜单本质上分两类，区别不搞清楚，数字就是瞎比。
+
+**开环（Open-Loop）** = 模型预测一条轨迹，和真值（Ground Truth）比偏差。周围车辆永远按日志里的轨迹走，不管你打没打方向盘。模型「自说自话」，不真的开车进来。
+
+**闭环（Closed-Loop）** = 模型输出的动作被模拟器真的执行，周围车辆会按策略反应——你急刹，后车跟着减速；你变道，对向车让行。这是接近真实驾驶的评测方式。
+
+开环最常用的指标是 L2 误差、ADE（Average Displacement Error）、minFDE。这些数字可以被做得很好看——模型只需要「猜对」真值在哪，不需要真的安全驾驶。一辆车撞上护栏再绕回来，ADE 可能比顺滑驾驶还低。
+
+所以读论文的第一原则：**只有开环 → 打折；只有开环 L2 → 大幅打折。**
+
+| 类型 | 代表指标 | 适用场景 |
+|------|----------|----------|
+| 开环 | L2 / ADE / minFDE / Miss Rate | 模型算法对比、离线分析 |
+| 闭环 | Driving Score / Collision Rate / PDMS | 真实安全驾驶能力 |
+
+## 2. NAVSIM：规划方向最通用的榜单
+
+**定位**：以 nuScenes 真实驾驶数据为基础，2026 年已出 v2，是目前论文引用最密集的规划评测榜单。
+
+NAVSIM 把场景分成两个难度档：
+- **navtest**：标准场景，常见路况，测试常规驾驶能力
+- **navhard**：长尾危险场景，刻意挑选的急刹、他车侵入、遮挡等高难度情境，测试鲁棒性
+
+v2 新增了两阶段评测协议，指标更细粒度。
+
+**核心指标**：
+
+| 指标 | 全称 | 含义 |
+|------|------|------|
+| **NC** | Navigation Completion | 目标达成率，越高越好 |
+| **PDMS** | Planning Domain Metric Score | 安全+效率+舒适综合分，0–100 |
+| **EPDMS** | Exposure-adjusted PDMS | 对危险行为的惩罚加权，PDMS 跌得越多说明越危险 |
+
+**2026 年头部数据**（来源：sota2.com / NAVSIM 官方）：
+
+| 赛道 | 方法 | 分数 | 说明 |
+|------|------|------|------|
+| navhard S1 v2 | DriveStack-VLA | 97.9 NC | 最高分，接近天花板 |
+| navhard S2 v2 | DiffusionDrive | 82.1 NC | 扩散策略，两步推理 |
+| navtest v2 | DrivoR | 99.4 NC | 已接近 Human 基线 |
+| navtest PDMS | DiffusionDrive | 88.1 PDMS | 一步推理 87.9，几乎无差 |
+| navhard EPDMS | Constant Velocity 基线 | 10.9 | 天花板太高，方法差的大幅下跌 |
+
+**关键读法**：NAVSIM 的 Human = 100 NC，天花板就在那。DiffusionDrive 一步推理（87.9 PDMS）几乎不输两步（88.1），说明「按场景难度动态调度步数」在工程上是可行的——和[上篇](/blog/posts/2026-10-02-ddpm-ddim-diffusion-on-vehicle/) DiffusionDrive 的板端优化讨论串上了。
+
+## 3. nuPlan：闭环规划元老，真实数据规模最大
+
+**定位**：Motional（2021 年与现代奔驰联合发布），最早的闭环 ML 规划 benchmark，基于真实驾驶日志，覆盖波士顿、Pittsburgh、拉斯维加斯、新加坡四城，原始版本约 1300–1500 小时数据。
+
+nuPlan 开创性地提出：开环 L2 误差有三个结构性缺陷——没有高层目标、多模态行为无法被单轨迹 L2 衡量、以及没有真实 agent 交互。所以它从一开始就是为闭环规划设计的。
+
+**三条赛道**：
+- **Open-loop**：预测未来 8 秒轨迹，与日志回放比较
+- **Closed-loop non-reactive**：模拟器执行轨迹，但他车按日志回放（不反应 ego 动作）
+- **Closed-loop reactive**：他车策略性反应，最接近真实驾驶
+
+**指标体系**（四维加权，安全作硬 mask）：
+
+| 维度 | 具体指标 |
+|------|----------|
+| 安全 | 碰撞率（Collision Rate）、TTC（Time-to-Collision）|
+| 规则合规 | 可行驶区域违规、方向违规、速度违规 |
+| 效率/进展 | 路径进展、速度维持 |
+| 舒适 | Jerk（急加速）、Yaw-rate（横摆角速度）|
+
+安全是硬 mask——只要碰撞，整个场景得 0 分。剩下三维加权平均，输出 0–1 之间的单场景分数，所有场景再取均值就是榜单排名。
+
+**2026 年头部数据**：
+
+| 赛道 | 方法 | 分数 |
+|------|------|------|
+| val14 | FlowDrive* | 95.02 NR Score |
+| test 14-hard | Human Expert | 85.96 |
+| val14 | Human Expert | 94 |
+| test | PDM-Closed | 69.66 Overall |
+
+nuPlan 的 Human Expert 基线在 val14 是 94，在 test 14-hard 是 85.96——说明困难场景下人类表现本身就会下降，榜单方法 95+ 是在 hard 集上超越人类。
+
+## 4. Bench2Drive：CARLA 系唯一真正闭环+E2E 传感器
+
+**定位**：2024 年发布，解决 CARLA Leaderboard 此前的致命缺陷——没有官方训练集，所有论文在私有配置上跑，无法公平比较。Bench2Drive 提供大规模标注训练集 + 标准化评测工具，是目前唯一同时支持「传感器输入 + 闭环 + 反应式他车 + 多能力拆解」的 E2E 榜单。
+
+**核心赛道**：
+- open-loop（轨迹 L2）
+- closed-loop（反应式他车）
+- Multi-ability（并线 / 转弯 / 泊车 / 跟车等子能力分项）
+
+**指标**：Driving Score = Route Completion × Infraction Penalty
+
+RC 衡量走多远的路，IP 衡量犯了多少错（闯红灯、压线、碰撞）。两者乘积让「走完但狂违章」和「安全但原地不动」都拿不到高分。
+
+**2026 年头部数据**：
+
+| 赛道 | 方法 | DS |
+|------|------|-----|
+| 官方 test | PDM-Lite | 97.02 |
+| 官方 test | VLGA | 79.08 |
+| 官方 test | HiP-AD | 86.77 |
+| Town 13 val | LinkVLA | 91.01 |
+| 官方 test | SimLingo-BASE | 85.9 |
+
+**注意**：PDM-Lite 97.02 DS 是闭环比分，开环 L2 数据要另找——这在榜单页是分开的两列。如果论文只报闭环比分，固然是因为它更「好看」，但也说明这个模型确实在闭环上下了功夫。
+
+## 5. Waymo E2E 挑战榜：真实数据，规模最大，坑最深
+
+**定位**：Waymo Open Dataset 官方 E2E 赛道，超过 10 万场景、每个 20 秒 / 10Hz、8 秒预测视野、六城覆盖。2026 年未举办官方 Challenge，但 leaderboard 持续开放提交。
+
+**注意坑**：Waymo 2026 无官方 Challenge，「没有比赛」不等于「榜单失效」——它仍是 Waymo 规模最大、最接近真实路测数据的评测集。
+
+**核心指标 RFS**（Relative Frequency Score）：
+
+RFS 是 Waymo 特有的「行为分布吻合度」指标，不是绝对安全分。计算的是模型行为与人类驾驶行为分布的相对频率——分数越高说明模型越像人类开车，但不等于碰撞率更低。一个「总是绕路避险但永远不碰撞」的模型可能 RFS 不如「跟车跟得一模一样但偶尔蹭线的模型」高。
+
+RFS 按场景类型分项：
+
+| 分项 | 含义 |
+|------|------|
+| RFS (Overall) | 综合分 |
+| RFS (Consensus) | 常规共识驾驶行为 |
+| RFS (Interaction) | 交互场景（多车博弈）|
+| RFS (Pedestrian) | 行人场景 |
+| RFS (Cyclist) | 骑行者场景 |
+
+**2026 年头部数据**（来源：sota2.com Waymo E2E Leaderboard）：
+
+| 方法 | RFS (Overall) | ADE 3s (m) | 说明 |
+|------|---------------|-------------|------|
+| NTR (Ensemble) | **7.998** | 1.19 | 当前最高，2026-05 |
+| Poutine (MLLM+RL) | **7.986** | 1.2055 | Qwen2.5 backbone，2026-01 |
+| IRL-VLA | **7.89** | 1.2184 | 2026-05 |
+| Expert（人类基线）| 8.1 | — | 天花板 |
+| OpenEMMA | 6.316 | 1.866 | Qwen backbone，2026-05 |
+
+## 6. WOD-E2E：Waymo 长尾专项
+
+**定位**：Waymo 从 640 万英里日志中筛出 0.03% 的稀有事件（2037 训练 / 479 验证 / 1505 测试），专门测试模型在真正危险场景下的表现。规模小但场景极端稀缺。
+
+**指标**：RFS（与 Waymo 主榜同体系，场景更难所以绝对分更低）
+
+**头部**：Poutine 7.986 RFS（与主榜同一模型，长尾场景同分）
+
+一个重要发现（WOD-E2E 论文的实验结论）：**几何指标如 ADE 与真实安全的相关性很差**——低 ADE 可能是模型「跟了假轨迹」，不代表安全；高 ADE 可能是模型选了安全的替代路径（绕路避险）而被惩罚。这个结论直接回答了为什么 Waymo 要用 RFS 而不是 L2 作为主要指标。
+
+## 7. CARLA Leaderboard：仿真端元老，版本坑最多
+
+**定位**：最早、最知名的自动驾驶仿真评测，分两个赛道：
+- **SENSORS 轨**：摄像头/LiDAR/Radar 输入
+- **MAP 轨**：额外提供 HD Map
+
+**指标**：Driving Score = Route Completion × Infraction Penalty
+
+**最关键的坑：版本混乱**。当前最新是 **v2.1（2025 年 3 月）**，v2.0 / v1.0 的结果与之不可直接比较。CARLA AD Challenge 2025 年未举办，很多论文说「CARLA 第一」但用的是私有配置或旧版本，根本没有可比性。
+
+| 版本 | 发布时间 | 可比性 |
+|------|----------|--------|
+| v1.0 | 早期 | 不可比 |
+| v2.0 | 约 2024 | 与 v2.1 不可直接比 |
+| v2.1 | 2025-03 | 当前官方最新 |
+
+读论文时遇到「CARLA 冠军」之类的说法，第一时间追问：哪个版本？
+
+## 8. 其他专项榜单
+
+| 榜单 | 特点 | 主要指标 |
+|------|------|----------|
+| **HUGSIM** | 硬件在环仿真，Reachability Coverage 评测反应能力边界 | RC（Easy/Medium/Hard/Extreme）|
+| **Argoverse** | 以多模态轨迹预测为主，规划评测弱 | minADE / minFDE |
+| **Waymax** | Waymo 出品，闭环但无传感器（privileged-info） | Collision Rate |
+| **LaMPilot** | 以决策指令为主 | Collision Rate、Reward |
+
+## 9. 读榜单数字的七个检查点
+
+读完上边这些，再看论文的结果表格就有一个固定的检查流程：
+
+**① 报的是 navtest 还是 navhard？** 只报 navtest 的 99+ 几乎等于没用，navhard 才测长尾。
+
+**② CARLA 是哪个版本？** v2.1 vs v1.0 vs longest6 完全不可比，版本不一致等于在说不同的考试。
+
+**③ 有闭环吗？** 只有开环 L2/ADE → 直接问「有没有闭环数据」，低 L2 ≠ 好驾驶。
+
+**④ 有传感器输入吗？** nuPlan / Waymax 部分赛道是 privileged-info（无传感器模拟），不代表真实 E2E 方案在传感器层面的能力。
+
+**⑤ Human baseline 是多少？** NAVSIM Human = 100 NC，nuPlan Human Expert ≈ 94–96，Waymo Expert = 8.1 RFS。没有基线参照，数字无意义。
+
+**⑥ RFS ≠ 安全 ≠ 碰撞率。** Waymo 的 RFS 是行为分布吻合度，不等于「不撞」。Poutine RFS 7.986，但它在长尾危险场景是否真的比 RFS 7.5 的模型更安全，要看碰撞率分项。
+
+**⑦ 赛道是否对应论文方法的能力边界？** 例如 DiffusionDrive 报 navhard 82.1 NC，是在「截断扩散 + 轻 decoder」的板端约束下拿到的分，不是算力无上限的大模型结果——这个数字比看起来更有意义，因为它说明在板端约束下仍然有效。
+
+## 10. 指标对照表
+
+| 指标 | 类型 | 越高越好？ | 主要使用场景 |
+|------|------|-----------|-------------|
+| L2 / ADE | 开环规划精度 | ❌ 越低越好 | 轨迹预测、离线分析 |
+| minFDE | 开环多模态精度 | ❌ 越低越好 | 多模态轨迹预测 |
+| Collision Rate | 闭环安全 | ✅ 越低越好 | 所有闭环评测 |
+| NC (Navigation Completion) | 闭环效率 | ✅ 越高越好 | NAVSIM |
+| PDMS / EPDMS | 闭环综合 | ✅ 越高越好 | NAVSIM |
+| Driving Score (DS) | 闭环综合 | ✅ 越高越好 | CARLA / Bench2Drive |
+| RFS | 行为分布吻合度 | ✅ 越高越好（上限 Expert ≈ 8.1）| Waymo / WOD-E2E |
+| Overall Score | 闭环综合 | ✅ 越高越好 | nuPlan |
+| Route Completion | 闭环效率 | ✅ 越高越好 | CARLA / Bench2Drive |
+| Infraction Penalty | 闭环合规 | ✅ 越高越好（满分 1.0）| CARLA / Bench2Drive |
+| Jerk / Yaw-rate | 闭环舒适 | ✅ 越低越好 | nuPlan |
+
+## 11. 串联到前几篇
+
+这条评测线把本博客好几条线索串了起来。[DDPM/DDIM 那篇](/blog/posts/2026-10-02-ddpm-ddim-diffusion-on-vehicle/)讨论的 DiffusionDrive 一步推理 87.9 PDMS vs 两步 88.1——这 0.2 分的差距换来的是板端延迟和算力账单的大幅削减，放在 NAVSIM navtest 上已经被证明可行，而这正是评测和板端部署之间的真正接口：指标够用就好，过度追求分数而忽略延迟，是对落地的一种误导。
+
+同样，[国产智驾芯片那篇](/blog/posts/2026-09-28-domestic-autonomous-driving-chips-2026/)的判断是「有效算力 > 峰值 TOPS」，DiffusionDrive 在 navhard 拿到 82.1 NC 时只需 2 步 DDIM + 60M 参数 decoder——如果用全 1000 步 DDPM，同样的芯片早就跑不动了。算法侧每砍一步，都是板端算力账单上实打实的减免。
+
+---
+
+## 参考资料
+
+- NAVSIM 官方：navsim.ai / nuScenes
+- nuPlan：nuplan.org（Motional + 奔驰）
+- Bench2Drive：arXiv:2406.03877，CARLA 官方
+- Waymo Open Dataset E2E Leaderboard：waymo.com
+- WOD-E2E：Waymo 长尾专项数据集
+- CARLA Leaderboard v2.1：carla.org
+- sota2.com（WizWand）：当前最全的论文榜单聚合
+- vnrobo.com「Benchmarks Are Arguments」系列：2026-08-11 对 NAVSIM v2 / Bench2Drive / WOD-E2E 的深度解读
+
+> ⚠️ **数据说明**：本文所有榜单数字均来自 sota2.com 聚合、官方 leaderboard 页面及论文报告。NAVSIM navhard 赛道头部天花板极高（DriveStack-VLA 97.9 NC），不同模型在不同子赛道上的对比应按赛道分开；CARLA 各版本之间不可跨版本比较；Waymo RFS 的 Expert 基线（8.1）是相对值，不是绝对安全分数。
