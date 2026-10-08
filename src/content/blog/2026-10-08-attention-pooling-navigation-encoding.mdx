@@ -1,0 +1,200 @@
+---
+title: "Attention Pooling：把 200 米的路线压成一个向量，max 丢了什么、attention 留什么"
+description: "导航线按 1 米一个点取 200 个点，MLP 出来 (B,200,256)，在 200 维上做 max pooling——结构上跟 PointNet 压点云是一回事，顺序和「在哪」全丢了。本文用公式+代码+对比实验，说清楚 max 的问题在哪，attention pooling 怎么把顺序和距离感请回来。"
+pubDate: 2026-10-08
+tags:
+  - Attention Mechanism
+  - Navigation Encoding
+  - Pooling
+  - Autonomous Driving
+  - Transformer
+---
+
+> 导航线按 1 米一个点取了未来 200 米，每个点绑着位置、朝向、指令，MLP 出来是 (B,200,256)——然后在 200 这个维度上做 max pooling，变成 (B,256) 喂给规划头。这个操作在结构上跟 PointNet 压点云是一回事：对称池化、置换不变，顺序和「在哪」全在池化里被洗掉了。
+
+## 1. 问题：你的 pipeline 是什么样的
+
+先对齐一下术语，避免鸡同鸭讲。
+
+```python
+# 输入：每条路由 200 个点，每个点绑着位置(x,y)、朝向θ、指令
+# shape: (batch, 200, M)，M 是特征维度
+nav_tokens = ...  # (B, 200, M)
+
+# MLP 处理每个点，输出仍是 per-point 的
+nav_hidden = mlp(nav_tokens)  # (B, 200, 256)
+
+# 在点的维度上做 max pooling
+nav_vector = nav_hidden.max(dim=1)  # (B, 256)
+#                   ↑
+#               跨 200 个路由点取 max
+```
+
+这里的 `max(dim=1)` 就是那个有问题的操作。它把一条有序路径压成一个固定向量，喂给规划头。问题在哪？往下看。
+
+## 2. Max Pooling 在这丢了什么
+
+### 2.1 顺序丢了
+
+Max 是对称函数——`max(5, 2, 8) = max(8, 5, 2) = max(2, 8, 5)`。把 200 个点的顺序打乱，输出 (B,256) 一字不变。这在语义上意味着：「在第 30 米左转，在第 180 米右转」和「在第 180 米左转，在第 30 米右转」被压成同一个向量，规划头没有理由把它们分开。
+
+这和 [PointNet 压点云丢失拓扑结构](/blog/posts/2026-10-04-pointnet-vs-mlp-road-topology/) 是一回事——都是对称池化把「谁在谁前面」的顺序信息洗掉了。
+
+### 2.2 「在哪」丢了
+
+每个点的 (x,y) 坐标虽然被编码进了特征 M 里，但 max 之后只剩每个通道的最大值，不保留这个最大值来自第几个点。「在路口 30 米处左转」和「在路口 180 米处左转」，max 出来完全一样——模型只知道「有左转」，不知道「在多近的地方」左转。
+
+对规划来说，近处的拐点和远处的拐点权重完全不同，max 没办法体现这个差异。
+
+### 2.3 梯度只回传 argmax 的点
+
+Max 的反向梯度是 one-hot 的：只回传到每个通道 argmax 所在的点，其他 199 个点梯度为零。训练时，直道上的点几乎永远不是任何通道的 argmax，长期拿不到梯度，学不出直道该长什么样——只有拐点附近的点被激活。
+
+## 3. Attention Pooling 是怎么工作的
+
+Attention pooling 的核心思想很简单：**不靠对称函数压池化，而是用一个可学习的 query 去「问」这 200 个点「你们整体在说什么」**。
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+class AttentionPooling(nn.Module):
+    """
+    Attention pooling: 一个可学习 query attend 过一串 token，
+    输出一个固定长度的聚合向量。
+    置换等变（permutation equivariant）：打乱 token 顺序会等价地打乱 attention 权重，
+    但输出向量不变——比 max 的置换不变更精确地保留了信息。
+    """
+    def __init__(self, dim: int):
+        super().__init__()
+        # 可学习的 query，向量初始值不重要，梯度会把它拉向有意义的方向
+        self.query = nn.Parameter(torch.randn(1, 1, dim))
+        # 隐层维度，可调
+        hidden = dim // 2
+        self.key_proj = nn.Linear(dim, hidden)
+        self.value_proj = nn.Linear(dim, hidden)
+        self.query_proj = nn.Linear(dim, hidden)
+        self.out_proj = nn.Linear(hidden, dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, D)，T=200，D=256
+        B, T, D = x.shape
+
+        # 把可学习 query 扩展到 batch 维度
+        q = self.query_proj(self.query)                  # (1, 1, H)
+        q = q.expand(B, -1, -1)                          # (B, 1, H)
+
+        # Key-Value 投影
+        k = self.key_proj(x)                             # (B, T, H)
+        v = self.value_proj(x)                           # (B, T, H)
+
+        # 注意力分数 → softmax → 加权聚合
+        scores = (q * k).sum(dim=-1) / math.sqrt(k.size(-1))  # (B, T)
+        attn = torch.softmax(scores, dim=-1)             # (B, T)，和为 1
+
+        # 加权求和：每个点按 attention 权重贡献
+        out = (attn.unsqueeze(-1) * v).sum(dim=1)        # (B, H)
+        out = self.out_proj(out)                         # (B, D)
+
+        return out, attn  # attn (B, T) 可以可视化：模型在看哪几个点
+
+# 用法：替换 max pooling
+# nav_vector, attn_weights = attention_pooling(nav_hidden)
+# nav_vector: (B, 256)，attn_weights: (B, 200)，可视化可看模型关注哪米
+```
+
+Attention pooling 出来的向量仍是 (B,256)，可以直接替换掉 `max(dim=1)` 喂给下游规划头，**不需要改任何下游代码**。
+
+## 4. 关键性质对比
+
+| | Max Pooling | Attention Pooling |
+|---|---|---|
+| **置换行为** | 置换不变（打乱输入，输出不变） | 置换**等变**（打乱输入，输出不变，但 attention 权重随之换位） |
+| **梯度分布** | 只回传给 argmax 点（one-hot） | 所有点都有梯度（softmax 归一化） |
+| **信息保留** | 每个通道只留最大值，不记来自哪个点 | 全部信息参与加权求和，点来源显式保留 |
+| **表达能力** | 瓶颈：语义不同但通道最大值相同的元素被混为一谈 | 无信息瓶颈，可学习权重决定保留什么 |
+| **位置感知** | 无 | 取决于 query 学到了什么；配合位置编码可显式建模「近/远」 |
+| **参数量** | 0（无参数） | ~2 层 Linear，约几十 KB |
+
+Attention pooling 的「置换等变」比 max pooling 的「置换不变」更精确地描述了正确的性质：打乱输入顺序时，attention 权重会跟着换位，但加权求和的输出保持不变。这意味着信息没有丢失——只是被重新组织了。
+
+## 5. 为什么它能学到「近处拐 vs 远处拐」
+
+Max 做不到这件事，因为 max 只看每个通道的单独最大值，不看通道之间的关系。Attention pooling 的 query 是一个可学习的向量，它通过注意力机制去「问」每个点：「你是第几米、你在哪个方向、你的指令是什么」。
+
+如果训练数据里「近处拐」和「远处拐」的标签不同，query 的梯度会把它拉向：给近处点更高的 attention 权重，给远处点更低的权重——这是模型自己学出来的，不是手工指定的。Max 做不到这件事，因为它没有可学习参数，也没有通道间的交互机制。
+
+如果想让这个过程更可控，可以把 query 扩展成两个（近处 query + 远处 query），或者直接用各点的**累积弧长**（0~200 米）做位置编码注入特征，让 attention 头有机会区分「第 30 米」和「第 180 米」：
+
+```python
+# 位置编码注入（可选，让 attention 更清楚「点在哪」）
+cumulative_dist = torch.arange(200, dtype=torch.float32).unsqueeze(0) / 200.0  # (1, 200)，归一化到 [0,1]
+nav_hidden = nav_hidden + cumulative_dist.unsqueeze(-1) * pos_embedding(dim=256)
+# 之后走 AttentionPooling，attention 头可以直接从累积距离判断近/远
+```
+
+## 6. 实验对比：打乱顺序看谁扛得住
+
+做一个快速验证：把 200 个点的顺序打乱，看 max pooling 和 attention pooling 的输出变化有多大。
+
+```python
+def shuffle_test(pooling_fn, nav_hidden, num_runs=5):
+    """
+    打乱 200 个点的顺序 num_runs 次，看 pooling 输出方差。
+    方差大 = 对顺序敏感（正常）；方差为零 = 顺序信息完全丢失（max 的情况）。
+    """
+    base_out, _ = pooling_fn(nav_hidden)
+    diffs = []
+    for _ in range(num_runs):
+        perm = torch.randperm(200)
+        shuffled = nav_hidden[:, perm, :]  # 打乱顺序
+        out, _ = pooling_fn(shuffled)
+        diff = (out - base_out).abs().mean().item()
+        diffs.append(diff)
+    return diffs
+
+# 测试
+max_diffs = shuffle_test(
+    lambda x: (x.max(dim=1)[0], None), nav_hidden
+)
+attn_diffs = shuffle_test(
+    attention_pooling, nav_hidden
+)
+print(f"max pooling 输出差异: {max_diffs}")   # 预期全部为 0 或极小
+print(f"attention pooling 输出差异: {attn_diffs}")  # 预期非零（保留顺序信息）
+```
+
+预期结果：**max pooling 每次差异为 0**（顺序信息完全丢失，实锤）；**attention pooling 差异非零**（输出随顺序变化，说明顺序信息被保留了）。
+
+## 7. 最小改动版本：直接替换
+
+如果懒得动 pipeline，只需要把这一行：
+
+```python
+# 之前
+nav_vector = nav_hidden.max(dim=1)[0]  # (B, 256)
+```
+
+换成：
+
+```python
+# 之后
+attention_pooling = AttentionPooling(dim=256)
+nav_vector, attn_weights = attention_pooling(nav_hidden)  # nav_vector: (B, 256), attn_weights: (B, 200)
+```
+
+下游不用改，因为输出 shape 一样是 (B,256)。如果下游接受 (B,200,256) 直通，那就更省事——直接省掉 pooling，把 (B,200,256) 当作一串 token 交给下游 cross-attention，[GoalFlow](/blog/posts/2026-09-24-goalflow-guideflow-flow-matching-vs-diffusion/) 和 UniAD 那一路就是这种做法。
+
+## 8. 总结
+
+**Max pooling 在 (B,200,256) 上做 `max(dim=1)` 的三个问题**：顺序被对称池化洗掉（第 30 米左转和第 180 米左转变成同一个向量）；不保留「在哪」信息；梯度只回传给每个通道的 argmax 点，其余 199 个点长期拿不到梯度。
+
+**Attention pooling 的三个对应优势**：置换等变而非置换不变（顺序信息被保留在加权求和里）；梯度全通（所有点都有贡献）；可学习 query 让模型自己决定「近处拐还是远处拐」哪个更重要。实现只需几十 KB 参数，输出 shape 与 max 完全一致，最小改动即可替换。
+
+## 参考资料
+
+- [PointNet 与 MLP：提取道路拓扑时，两者到底差在哪](/blog/posts/2026-10-04-pointnet-vs-mlp-road-topology/)——本文的「拓扑视角」，置换不变 vs 置换等变的完整推导
+- [Flow Matching 详解：为什么把生成路径拉直，就能一步出结果](/blog/posts/2026-09-24-flow-matching-explained/)——导航序列建模的另一条路线，流匹配不依赖对称池化
+- [GoalFlow 与 GuideFlow：把弯曲的路拉直](/blog/posts/2026-09-24-goalflow-guideflow-flow-matching-vs-diffusion/)——UniAD/GoalFlow 一路直接用 cross-attention 传递路由信息，不做池化
+- A. Vaswani et al., *Attention Is All You Need*, NeurIPS 2017——原始 attention 机制
