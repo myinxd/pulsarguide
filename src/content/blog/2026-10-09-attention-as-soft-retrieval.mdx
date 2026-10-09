@@ -1,0 +1,106 @@
+---
+title: "注意力就是软检索：从矩阵乘法到 Transformer 的关联记忆"
+description: "softmax(QKᵀ)V 背下来容易，但它在物理上干的是一件很古老的事——内容寻址的软检索。本文从矩阵乘法的加权求和讲起，把 QKᵀ 看成相似度表、softmax 看成权重、A·V 看成动态加权求和，再从 query 和 value 两个视角把注意力还原成一把「关联记忆」的钥匙。"
+pubDate: 2026-10-09
+tags:
+  - Transformer
+  - Attention Mechanism
+  - Key-Value
+  - Associative Memory
+  - Matrix Multiplication
+  - Autonomous Driving
+  - Tutorial
+---
+
+> softmax(QKᵀ)V 大家都背得下来，但它物理上在干一件很古老的事——内容寻址的软检索。把这件事想通，KV cache 为什么能加速、cross-attention 为什么能接图像和路由、和你前几篇写的 max pooling / attention pooling 又是什么关系，会一下子全顺了。
+
+## 1. 引子：注意力在算什么
+
+大多数人第一次学 Transformer，是把 `softmax(QKᵀ / √d) V` 当公式背的。但如果你问「它在物理上干什么」，一个更诚实的答案是：**它在做一次软检索**——从一个由 value 向量组成的「内容库」里，按 query 和 key 的相似度，把相关的内容揉成一条输出。
+
+这把事说破之后，很多原本零散的现象会归到一处：自回归的 KV cache、规划头对图像特征的 cross-attention、以及你前面写过的 max pooling 和 attention pooling，其实都在回答同一个问题——**怎么从一堆向量里组合/检索出我要的信息**。
+
+## 2. 矩阵乘法就是加权求和（桥）
+
+注意力的每一块都是矩阵乘法，而矩阵乘法最贴近直觉的读法就是**加权求和**。
+
+`Y = XW` 里，每一个输出通道都是输入通道的一个加权求和：输出第 k 路 = Σⱼ W[j,k] · xⱼ，权重就是 W 的第 k 列，是训死的参数、跟输入无关。几何上它还是一次线性变换（旋转+缩放+剪切，也可以说把输入投到一组新基上），两种读法互补——前者讲「怎么混特征」，后者讲「空间怎么被扭」。
+
+```python
+import torch, math
+
+def attention(Q, K, V):
+    # Q,K,V: (n, d)
+    scores = Q @ K.T / math.sqrt(Q.size(-1))   # (n, n) 相似度表
+    attn = torch.softmax(scores, dim=-1)         # (n, n) 每行和为 1
+    out = attn @ V                               # (n, d) 加权求和
+    return out, attn
+
+# 物理意义：out[i] = sum_j attn[i, j] * V[j]
+#   = 所有 value 向量的加权求和，权重来自 query_i 与 key_j 的相似度
+```
+
+注意力的全部，就是把「加权求和」这个动作，换成**权重当场算、而不是训死**。拆开看三步。
+
+## 3. 拆开注意力：三步
+
+**第一步，QKᵀ 是一张相似度表。** 每个元素 (i,j) = queryᵢ 和 keyⱼ 的点积，物理意义是**对齐度/相似度**。点积 = 模长乘积 × 余弦相似度，所以谁和谁相关、多大程度上，全在这一张表里。`√d` 只是把点积缩到 softmax 不容易饱和的尺度。
+
+**第二步，softmax 把每行压成权重。** 每一行过 softmax 之后，和为 1，变成一个「检索分布」——第 i 个 query 该把多少注意力分给第 j 个位置。
+
+**第三步，A·V 是加权求和。** 输出第 i 个向量 = Σⱼ A[i,j] · V[j]，也就是**所有 value 向量的一个加权求和**，权重就是第 i 行注意力。这一步和 `XW` 在形式上没区别——都是矩阵乘——但 A 不是参数，是 Q 和 K 当场算出来的。
+
+## 4. 从 query 看：一句「我要找什么」
+
+把 query 当成一句检索意图。QKᵀ 算出它和每个 key 的匹配度，softmax 把匹配度变成检索权重，A·V 是按这个权重去把相关内容「软读出」。
+
+对比一下硬检索（数据库查表、argmax）：硬检索是「最像的那一条，给我」；注意力是「按相似度把所有条都揉进来，像的多给点、不像的少给点」，而且整个过程可微、能反传。这就是「软」的意思——不是非此即彼，而是按内容权重连续混合。
+
+## 5. 从 value 看：一排内容槽（关联记忆）
+
+换个视角，V 就是一排「内容槽」，K 是这些槽的「地址标签」。注意力做的事，是用 query 当钥匙，按**内容地址**去这些槽里取东西——而不是按位置下标去取。
+
+这把注意力还原成了一个老概念：**关联记忆（associative memory）**。你给一个检索线索（query），它返回与之匹配的内容（value），中间靠 key 来匹配。现代 Hopfield 网络的研究也证明了：带 softmax 的注意力，本质就是一次现代 Hopfield 的关联记忆读出。所以「注意力 = 软检索」不是比喻，是同一件事的两种说法。
+
+## 6. 关键区别：固定加权 vs 动态加权
+
+这是整件事里最有信息量的一点，值得单拎出来说。
+
+- **线性层 = 固定加权求和**：权重是参数 W，跟输入无关。同一套配比，喂什么数据都这么混。
+- **注意力 = 动态加权求和**：权重是 QKᵀ 当场算的，换个输入，谁该被多取、谁该被少取，全跟着变。
+
+注意力真正的 payload 不是「能加权求和」（线性层早就做到了），而是**组合权重是数据依赖的**——「这次该检索谁」由内容决定，而不是预先训死。
+
+```python
+# 线性层：固定加权求和（权重 = 参数 W，与输入无关）
+out_fixed = X @ W                 # 每个输出通道 = 输入通道的固定加权
+
+# 注意力：动态加权求和（权重 = Q,K 当场算的）
+out_dynamic, _ = attention(Q, K, V)   # 每个输出 = value 的、数据依赖的加权
+```
+
+## 7. 为什么这和 KV cache、cross-attention 有关
+
+**KV cache。** K 和 V 算出一次之后，就成了一排固定的内容槽。后续每个新 query 只要再做一次「加权求和」去取，不用重算 K、V——自回归生成能加速，根子就在这：内容库复用，只换检索意图。
+
+**cross-attention。** query 来自一处，K=V 来自另一处。比如规划头的 query 来自 ego 状态，K=V 来自图像 patch 或路由点——这就是「用 query 去另一堆槽里检索」。和你前一篇写的 attention pooling 是同一件事：一个可学 query，把路由点当 K=V，按内容把 200 个点揉成一条向量。
+
+**接 max pooling。** 你那篇里 max 是更死的加权求和：对称、丢顺序、梯度只回传 argmax。attention pooling 把它升级成动态加权、留顺序。而完整注意力再往前一步——不只是「揉」，还能「按内容寻址」去检索。三者其实是同一条线的三个台阶：**怎么从一堆向量里组合/检索出信息**。
+
+## 8. 回到自动驾驶：query 在问什么
+
+落到车上就很具体。规划头的 query 可能在问「前方的路口在哪、我该不该减速」；QKᵀ 去图像/地图特征里找相关的 patch，softmax 决定每个 patch 该占多少，A·V 把这些 patch 的特征揉成规划可用的上下文。cross-attention 把路由点（K=V）和 ego 状态（query）接起来——你那篇路由编码要解决的，正是「怎么把这 200 个点喂给下游」，attention pooling 是其中让顺序和距离感回来的那一步。
+
+所以从这条线看，端到端规划里反复出现的不是「注意力多玄」，而是「怎么把一堆无序/有序的向量，按内容检索、组合成有用的上下文」。max 太死、attention pooling 够用、完整注意力最灵活，选型看你要不要内容寻址。
+
+## 9. 总结
+
+一句话：**Transformer 的注意力 = 一次内容寻址的、数据依赖的加权求和，本质是把「检索」做成可微操作。** 矩阵乘法负责「加权求和」这个动作，QKᵀ 负责「按内容算权重」，V 提供「被检索的内容」。想通这一层，KV cache、cross-attention、以及和你那几篇 max/attention pooling 的关系，会一起归位。
+
+## 参考资料
+
+- [读懂 Self-Attention 和 Cross-Attention：以自动驾驶导航选道为例](/blog/posts/2026-07-05-self-attention-vs-cross-attention/)——同系列，从导航选道讲注意力的两种形态
+- [Attention Pooling：把 200 米的路线压成一个向量，max 丢了什么、attention 留什么](/blog/posts/2026-10-08-attention-pooling-navigation-encoding/)——本文的「动态加权」台阶，路由编码的落地
+- [PointNet 与 MLP：提取道路拓扑时，两者到底差在哪](/blog/posts/2026-10-04-pointnet-vs-mlp-road-topology/)——置换不变 vs 置换等变，同一根「怎么聚合一堆向量」的线
+- A. Vaswani et al., *Attention Is All You Need*, NeurIPS 2017——原始注意力机制
+- H. Ramsauer et al., *Hopfield Networks is All You Need*, ICLR 2021——注意力即现代 Hopfield 关联记忆的数学证明
