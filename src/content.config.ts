@@ -30,6 +30,13 @@ const paperNotes = defineCollection({
     paperUrl: z.string().url().optional(),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
+    series: z
+      .object({
+        key: z.string(),
+        title: z.string(),
+        order: z.number(),
+      })
+      .optional(),
   }),
 });
 

@@ -30,6 +30,11 @@ const { Content } = await render(note);
           🔗 查看原论文 ↗
         </a>
       )}
+      {note.data.series && (
+        <a href={`/paper-notes/series/${note.data.series.key}/`} class="series-link">
+          📚 {note.data.series.title} · 第 {note.data.series.order} 篇
+        </a>
+      )}
       <h1>{note.data.title}</h1>
       <p class="post-desc">{note.data.description}</p>
     </header>
@@ -83,6 +88,22 @@ const { Content } = await render(note);
   }
   .paper-link:hover {
     background: rgba(100, 116, 139, 0.2);
+  }
+
+  .series-link {
+    display: inline-block;
+    margin-left: 0.5rem;
+    background: rgba(8, 145, 178, 0.08);
+    border: 1px solid rgba(8, 145, 178, 0.25);
+    padding: 0.3rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    color: var(--accent-2, #0891b2);
+    text-decoration: none;
+    margin-bottom: 1rem;
+  }
+  .series-link:hover {
+    background: rgba(8, 145, 178, 0.16);
   }
 
   .post-header h1 {

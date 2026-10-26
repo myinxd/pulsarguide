@@ -5,6 +5,15 @@ import { getCollection } from 'astro:content';
 const notes = (await getCollection('paperNotes'))
   .filter((note) => !note.data.draft)
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+const seriesMap = new Map();
+for (const note of notes) {
+  if (!note.data.series) continue;
+  const { key, title } = note.data.series;
+  if (!seriesMap.has(key)) seriesMap.set(key, { key, title, count: 0 });
+  seriesMap.get(key).count += 1;
+}
+const seriesList = Array.from(seriesMap.values());
 ---
 
 <Layout title="论文笔记" description="自动驾驶论文精读与思考">
@@ -12,6 +21,18 @@ const notes = (await getCollection('paperNotes'))
     <h1>📄 论文笔记</h1>
     <p>自动驾驶领域前沿论文的精读、总结与思考</p>
   </section>
+
+  {
+    seriesList.length > 0 && (
+      <section class="series-row">
+        {seriesList.map((s) => (
+          <a href={`/paper-notes/series/${s.key}/`} class="series-chip">
+            📚 {s.title} · {s.count} 篇 →
+          </a>
+        ))}
+      </section>
+    )
+  }
 
   <section class="post-list">
     {
@@ -53,6 +74,29 @@ const notes = (await getCollection('paperNotes'))
   .page-header p {
     color: var(--text-secondary);
     margin-top: 0.5rem;
+  }
+
+  .series-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding-bottom: 1.5rem;
+  }
+
+  .series-chip {
+    display: inline-block;
+    background: rgba(100, 116, 139, 0.1);
+    border: 1px solid rgba(100, 116, 139, 0.25);
+    border-radius: 999px;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.85rem;
+    color: var(--accent-2, #0891b2);
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+
+  .series-chip:hover {
+    background: rgba(100, 116, 139, 0.2);
   }
 
   .post-list {
