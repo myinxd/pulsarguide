@@ -116,11 +116,17 @@ std_r      = std(rewards) + 1e-6
 advantages = [(r - mean_r) / std_r for r in rewards]        # 组内相对优势
 ```
 
-策略更新以相对优势为权重，无需价值网络。关键在于引入对参考策略 $\pi_{ref}$（通常为 SFT 模型）的 KL 约束，防止为追求奖励而偏离安全基线：
+策略更新**保留 PPO 的 clip 结构**，只把优势估计从 Critic 换成组内相对值。设 $\pi_{\theta_{old}}$ 为采样出这一组轨迹的策略，重要性采样比 $\rho_i = \pi_\theta(a_i|o) / \pi_{\theta_{old}}(a_i|o)$：
 
-$$\mathcal{L}_{GRPO} = \mathbb{E}\Big[ A_i \cdot \log \frac{\pi_\theta(a_i|o)}{\pi_{\theta_{ref}}(a_i|o)} \Big] - \beta\, \mathrm{KL}\big(\pi_\theta \,\|\, \pi_{\theta_{ref}}\big)$$
+$$\mathcal{L}_{GRPO} = \frac{1}{G}\sum_{i=1}^{G} \min\Big( \rho_i \hat A_i,\ \mathrm{clip}(\rho_i,\, 1-\epsilon,\, 1+\epsilon)\,\hat A_i \Big) - \beta\, \mathrm{KL}\big(\pi_\theta \,\|\, \pi_{\theta_{ref}}\big)$$
 
-KL 项充当训练期的安全带：允许策略为更高奖励优化，但限制其偏离参考策略的幅度，从而在「提升驾驶质量」与「不破坏安全底线」之间取得平衡。对轨迹生成这类连续、高维、易学飞的任务，GRPO 在稳定性与样本效率上通常优于 PPO。
+**那个 $\min$ 配 $\mathrm{clip}$ 不是装饰，它是整个 PPO 家族的全部安全机制。** 直觉是：当一条轨迹的优势为正、而当前策略已经把它推得比采样时高出 $1+\epsilon$ 倍，梯度就被截断，不再继续加码；优势为负时同理，跌过 $1-\epsilon$ 就不再继续打压。$\epsilon$ 通常取 0.2——意思是**一次更新不允许把任何一个动作的概率改动超过约 20%**。
+
+两个策略的分工很容易混：$\pi_{\theta_{old}}$ 只出现在 $\rho$ 里，负责校正「这批数据是旧策略采的」；$\pi_{\theta_{ref}}$ 只出现在 KL 里，负责把策略锚在安全基线上。前者每个 batch 都换，后者通常固定为 SFT 模型。
+
+KL 项充当训练期的安全带：允许策略为更高奖励优化，但限制其偏离参考策略的幅度，从而在「提升驾驶质量」与「不破坏安全底线」之间取得平衡。
+
+所以准确的表述是：**GRPO 省掉的是价值网络，不是稳定性机制。** 它没有发明新的策略梯度目标，而是完整保留了 PPO 的 clip，只把优势估计从「Critic 预测」换成「同场景下组内几条轨迹的相对排名」——对轨迹生成这种连续、高维、价值函数极难学的任务，后者的估计方差反而更小。
 
 ---
 
