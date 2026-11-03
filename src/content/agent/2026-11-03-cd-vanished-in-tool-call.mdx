@@ -1,0 +1,179 @@
+---
+title: "它不是忘了 cd，是有人不让它写"
+description: "用 Claude Code 接 GLM 5.3 Flash，让它 ssh 到服务器再跑 git，thinking 里明明写了 cd，发出来的命令却少了这一截，而且 reject 五次也绕不出来。这不是模型智商问题：一条 system prompt 规则在跨机器边界时静默失效了。这篇把三层失效拆开，附一份能直接抄的解法清单。"
+pubDate: 2026-11-03T17:00:00+08:00
+tags:
+  - Claude Code
+  - 指令层级
+  - GLM
+  - Harness
+  - Agent
+  - 工程实践
+series:
+  key: context-engineering
+  title: 上下文工程
+  order: 3
+---
+
+> 你在 Claude Code 里敲一句话：ssh 到那台机器，cd 到 `/data/repo`，把 `git status` 和最近的 log 拉出来看看。
+>
+> 它想了。thinking 里写得清清楚楚：「需要先 cd 到 `/data/repo`，再执行 git 命令」。
+>
+> 然后它发出的命令是 `ssh host "git status"`。
+>
+> 目录没了。
+>
+> 你 reject。它道歉，说「你说得对，我应该先 cd 到那个目录」。然后发出同一条命令。再来一次，还是同一条。
+
+## 一、一个不该出现的组合
+
+先说清楚为什么这事值得停下来看一眼。
+
+如果模型压根没意识到要 cd，那是能力问题，认了，换个模型或者把话说清楚就行。但 thinking 里明确写了要 cd，最终命令里没有——**说明「知道」和「做」之间被插了一刀**。这一刀不在权重里，在模型外面。
+
+而且它挑食。cd 用在 `ls`、`cat`、`python` 前面都没事，偏偏后面跟着 git 的时候就消失。这个模式太整齐了，不像随机遗忘。
+
+一个只在特定命令前缀上稳定复现的错误，背后一定有一条规则。找到规则，问题就解了一半。
+
+## 二、凶手：工具描述里的第三句话
+
+Claude Code 的 Bash 工具描述有一份 "maintain cwd" 版本。原文如下：
+
+> Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it. **In particular, never prepend `cd <current-directory>` to a `git` command** — `git` already operates on the current working tree, and the compound triggers a permission prompt.
+
+*信源成色：这段提取自 `claude-code-system-prompts` 仓库，属逆向抓取，不是 Anthropic 官方发布物（文件头标 `ccVersion: 2.1.113`）。不过它与官方《工具参考》里工作目录那一节的描述完全对得上，可信度较高。*
+
+第三句就是凶手。「永远不要在 git 命令前加 cd。」
+
+**这条规则不是错的，它甚至很聪明。** Claude Code 每条 Bash 命令都跑在独立进程里，跨命令的目录状态靠「命令末尾执行 `pwd -P > tmpfile`，再把结果读回内部状态」来维持。所以在它自己的世界里，git 天然就在正确的树上，加 cd 是冗余的，还会多弹一次权限确认。
+
+在本地单机上，这条规则 100% 正确。
+
+问题在于它有一个没说出口的前提。
+
+## 三、两个正确设计，组合出一个 bug
+
+Claude Code 的 Bash 模型有两条设计，分开看都合理：
+
+| 设计 | 内容 | 单独评估 |
+|------|------|:---:|
+| A | 每条命令独立进程，cd 不跨调用保持 | 对，防状态泄漏 |
+| B | 不要在 git 前加 cd，壳负责维护 cwd | 对，防冗余和权限弹窗 |
+
+A 说「cd 不会保持」，B 说「别写 cd」。两条叠起来的隐含依赖是：**壳的 cwd 追踪是唯一的目录真相源**。
+
+这个依赖什么时候断？跨机器的时候。
+
+`ssh host "git status"` 的 cwd 是**远端登录 shell 的初始目录**，通常是 `~`。而 Claude Code 追踪的是本地那个进程的 pwd。两个 cwd 之间毫无关系，但代码里只有一个变量：
+
+```text
+本地 pwd  = /Users/jasonma/work/proj     ← 壳认为在这儿
+远端 pwd  = /home/deploy                  ← git 实际在这儿
+cd 指令   = 被规则剥掉                     ← 唯一的修正手段没了
+```
+
+三条线在这里同时断掉，而且断得很安静——没有任何报错说「cwd 失配」，只有 git 回一句 `not a git repository`。
+
+更讽刺的是设计 A：它意味着你没法先 `ssh host`、再分几条命令依次 `cd` 和 `git`。ssh 会话在第一条命令返回时就结束了。**所以你必须把 cd 和 git 塞进同一条命令里——而恰恰就在这一条命令里，规则把 cd 拿掉了。**
+
+两个各自正确的设计，组合起来在 ssh 场景下必然失败。这类 bug 最难查，因为每一部分单独测都是绿的。
+
+## 四、为什么 reject 拽不回来
+
+这是最反直觉的部分：你明明拦下来了，它认错了，还是照做。
+
+**第一层：reject 作用在错误的层级。** 那条规则在 system prompt / 工具描述里，reject 只是 user 层的一条消息。模型面对的是「一条高层规则」和「一条低层反馈」的冲突，它会服从高层。它不是不听你，是**在这个位置上你没它上面那层有权限**。
+
+**第二层：这不是孤例，有实录。** anthropics/claude-code 的 issue #43189 里，有人装了强制 cd 的 PreToolUse hook，hook 明确返回 `BLOCKED` 加修复建议，逐字告诉它「在命令前加 cd」。结果 Claude 连续五次原样重复同一条命令，每次都道歉，每次都不改。*信源：社区 issue，截至记录时未修复。*
+
+**第三层：GLM 5.3 把这个问题放大了。** Claude Code 在用户拒绝之后，会让该会话后续请求不再带 thinking。而 GLM-5.3 系列从设计上就不允许关思考。Z.ai 官方发布说明的原话是：
+
+> GLM-5.3 supports three thinking effort levels: low, high, and max. Disabling thinking is no longer supported by GLM-5.3.
+
+于是只剩两条路：要么被降级到低 effort（推理能力下去，更容易机械复读上一条命令），要么直接 400（错误码 1210，官方给的提示是「该模型始终思考，不支持关闭思考」）。此外 GLM 5.3 Flash 另有一个已知问题：约 50 步后停止思考并进入循环。
+
+*需要标注一句：「reject 后 Claude Code 关闭该会话剩余 thinking」这个说法来自第三方汇总文章，我没在官方文档里找到对应条款，请按二手信息看待。但「GLM 5.3 不能关思考」是官方明确的，两者叠加足以解释症状。*
+
+所以形成闭环：**规则剥掉 cd → 远端失败 → 你 reject → 壳关 thinking → 模型不能真关，只能降级 → 反复发同一条**。你越 reject，它越僵。
+
+## 五、这不是模型智商问题，是壳的隐含假设
+
+把这件事抽象一层，会看到一个更普遍的东西。
+
+harness 里的每一条提示词，都编码了一个环境假设。「壳会维护 cwd」这条假设，在单机上成立，在多机上不成立。而这类假设永远不会出现在文档的「限制」章节里——因为写的人不觉得它是假设，它就是常识。
+
+这跟上下文压缩是同一个形状。压缩假设「对话历史是信息的唯一载体」，可你真正重要的约束可能写在别处；ssh 假设「cwd 只有一份」，可跨机器时它有两份。**边界一变，隐含假设就静默失效，而且不报错。**
+
+这也是为什么「壳比模型值钱」这个说法要补一句：**壳里最贵的不是它的功能，是它没写出来的前提。** 功能你可以查文档，前提只能靠踩坑。
+
+## 六、四条解法，按性价比排
+
+**① 用 `git -C` 代替 cd（首选）**
+
+```bash
+ssh server "git -C /data/repo status"
+```
+
+规则禁的是 `cd`。`-C` 是 git 自己的全局参数，不在管辖范围内，也不依赖任何 cwd 状态。干净、幂等、还少一次权限弹窗。社区里提到这个坑的帖子，给出的也是这个解。
+
+**② 在 `CLAUDE.md` 里显式豁免**
+
+规则原文写了 "You may use `cd` if the User explicitly requests it"。把请求写进项目级 CLAUDE.md，等于把它抬到和规则同一层：
+
+```markdown
+## 远端主机操作
+
+本项目所有 git 操作在远端 `server` 的 `/data/repo` 下执行。
+
+系统提示里「never prepend cd to a git command」这条规则**不适用于 ssh 远端场景**：
+本地 cwd 追踪对远端无效，不加 cd 必然在 `~` 下执行。
+
+统一写成：
+ssh server 'git -C /data/repo <subcommand>'
+
+单条命令内完成，命令之间不保留任何目录状态。
+```
+
+**③ 检查 `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`**
+
+设成 `1` 会让工具描述切到「maintain cwd」那一版——也就是第二节那条规则的来源。linux.do 上有人踩过几乎同款的坑（GLM-4.7 在错误目录死循环跑编译），根因就是这个变量。*信源：社区论坛，非官方。* 如果你设过，先去掉试试。
+
+**④ 用 hook 兜底，但别只做阻断**
+
+hook 的价值在于它是确定性的。但 #43189 证明了纯阻断会被无视，所以更有效的做法是在报错里直接给出成品命令：
+
+```bash
+# PreToolUse hook：拦到 ssh + git 却没有目录切换时，把改好的命令递回去
+cmd=$(jq -r '.tool_input.command' < /dev/stdin)
+if echo "$cmd" | grep -qE '^ssh .*git ' && ! echo "$cmd" | grep -qE 'git -C|cd '; then
+  echo "BLOCKED: $cmd" >&2
+  echo "改写为: ssh <host> \"git -C /data/repo <subcommand>\"" >&2
+  echo "直接使用上面这条，不要重试原命令。" >&2
+  exit 2
+fi
+exit 0
+```
+
+顺带一句呼应：之前在讲 harness 的那篇里，我们用同一个位置（PreToolUse）拦过 curl/ssh 防止日志外流。**同一个钩子，一边用来堵住出口，一边用来补上入口。**
+
+**⑤ 卡住了怎么脱身**
+
+别继续 reject。上下文里已经堆了一串错误示范，模型在做负向的 in-context 学习，越滚越深。直接 `/clear` 开新会话，第一句就给成型命令（用 `git -C` 写法）。如果 reject 后关闭 thinking 确实是会话级的，只有清掉才能恢复。
+
+## 七、和专栏前文的关系
+
+上一篇[《压缩不是备份，是有损摘要》](/agent/posts/2026-09-16-compaction-is-lossy/)的结论是：**能不能活过一次压缩，取决于信息放在哪，而不是你怎么措辞。**
+
+这篇是同一条结论在另一个维度上的重演：**这条指令能不能生效，取决于它在哪一层，而不是你怎么措辞。**
+
+- 写在对话里 → 会被压缩摘要掉，也会被 reject 后的降级吞掉
+- 写在 CLAUDE.md 里 → 能活过压缩，还能和 system prompt 的规则掰手腕
+- 写进工具/schema 的设计里 → 最硬，但你改不动
+
+所以那个系列反复在讲的事，其实一句话：**Agent 的很多失败不是「它不懂」，是「它懂了但没权限照做」。** 前者靠提示词工程，后者只能靠换位置。
+
+下一篇想写「工具描述本身也是提示词」——上面那条 `never prepend cd` 就是活例子：它藏在 schema 里，比任何 CLAUDE.md 都硬，但几乎没人会去读它。
+
+---
+
+*信息源：Claude Code 官方《工具参考》工作目录与环境变量章节；`claude-code-system-prompts` 仓库逆向提取的 `tool-description-bash-maintain-cwd.md`（非官方，ccVersion 2.1.113）；anthropics/claude-code issue #43189（社区，未修复）；Z.ai 官方 GLM-5.3 发布说明「API Changes」章节；linux.do 论坛 GLM-4.7 死循环帖（社区）；第三方汇总文章关于「reject 后关闭 thinking」与「约 50 步后循环」的说法（二手，未获官方确认）。*
