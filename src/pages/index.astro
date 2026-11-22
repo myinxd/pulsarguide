@@ -1,5 +1,67 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import { getCollection } from 'astro:content';
+
+const posts = [
+  ...(await getCollection('blog')),
+  ...(await getCollection('agent')),
+  ...(await getCollection('paperNotes')),
+];
+
+const seriesMap = new Map();
+for (const post of posts) {
+  if (post.data.draft || !post.data.series) continue;
+  const key = post.data.series.key;
+  if (!seriesMap.has(key)) {
+    seriesMap.set(key, {
+      key,
+      title: post.data.series.title,
+      count: 0,
+      collection: post.collection,
+    });
+  }
+  const entry = seriesMap.get(key);
+  if (entry) entry.count++;
+}
+
+const featuredKeys = ['diffusion-on-vehicle', 'e2e-driving-stack', 'agent-harness'];
+const blurbs: Record<string, string> = {
+  'diffusion-on-vehicle': '从 Flow Matching 到 DDIM，从 BF16 到车规芯片实时推理。',
+  'e2e-driving-stack': '一段式端到端的工程真问题、注意力机制与导航选道。',
+  'agent-harness': '从 harness 架构到 API 迁移，TL 岗加分的工程实践。',
+};
+const seriesHref = (s) =>
+  s.collection === 'paperNotes' ? `/paper-notes/series/${s.key}/` : `/blog/series/${s.key}/`;
+
+const featured = featuredKeys
+  .map((key) => seriesMap.get(key))
+  .filter(Boolean)
+  .map((s) => ({ ...s, href: seriesHref(s), blurb: blurbs[s.key] }));
+
+const others = [...seriesMap.values()]
+  .filter((s) => !featuredKeys.includes(s.key))
+  .sort((a, b) => b.count - a.count)
+  .map((s) => ({ ...s, href: seriesHref(s) }));
+
+const postHref = (post) => {
+  if (post.collection === 'agent') return `/agent/posts/${post.id}`;
+  if (post.collection === 'paperNotes') return `/paper-notes/notes/${post.id}`;
+  return `/blog/posts/${post.id}`;
+};
+const recent = posts
+  .filter((post) => !post.data.draft)
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+  .slice(0, 3)
+  .map((post) => ({
+    title: post.data.title,
+    href: postHref(post),
+    date: post.data.pubDate.toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }),
+    tags: post.data.tags.slice(0, 2),
+  }));
 ---
 
 <Layout>
@@ -23,27 +85,60 @@ import Layout from '../layouts/Layout.astro';
     </div>
   </section>
 
-  <section class="features">
-    <div class="feature-card">
-      <span class="feature-tag">[01] PAPERS</span>
-      <div class="feature-icon">📄</div>
-      <h3>论文笔记</h3>
-      <p>自动驾驶领域前沿论文的精读与思考。</p>
-      <a href="/paper-notes">查看笔记 →</a>
+  <section class="series-section">
+    <div class="section-heading">
+      <span class="section-kicker">// READING PATHS</span>
+      <h2>按专栏读</h2>
+      <p>散装文章是日志，专栏才是作品集。</p>
     </div>
-    <div class="feature-card">
-      <span class="feature-tag">[02] ENGINEERING</span>
-      <div class="feature-icon">🔧</div>
-      <h3>工程实践</h3>
-      <p>从实际项目积累的自动驾驶算法与系统经验。</p>
-      <a href="/blog">阅读文章 →</a>
+
+    <div class="features">
+      {
+        featured.map((s, i) => (
+          <a href={s.href} class="feature-card">
+            <span class="feature-tag">[{String(i + 1).padStart(2, '0')}] · {s.count} 篇</span>
+            <h3>{s.title}</h3>
+            <p>{s.blurb}</p>
+            <span class="feature-link">进入专栏 →</span>
+          </a>
+        ))
+      }
     </div>
-    <div class="feature-card">
-      <span class="feature-tag">[03] PLANNING</span>
-      <div class="feature-icon">🛣️</div>
-      <h3>导航选道</h3>
-      <p>行为规划、运动预测与决策算法深度解析。</p>
-      <a href="/blog">深入了解 →</a>
+
+    <div class="other-series">
+      <span class="other-label">更多系列</span>
+      <div class="other-links">
+        {
+          others.map((s) => (
+            <a href={s.href} class="series-pill">
+              {s.title} <span class="pill-count">{s.count}</span>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="recent-section">
+    <div class="recent-head">
+      <div>
+        <span class="section-kicker">// LATEST</span>
+        <h2>最近更新</h2>
+      </div>
+      <a href="/blog" class="recent-all">全部文章 →</a>
+    </div>
+    <div class="recent-list">
+      {
+        recent.map((post) => (
+          <a href={post.href} class="recent-item">
+            <time class="recent-date">{post.date}</time>
+            <span class="recent-title">{post.title}</span>
+            <span class="recent-tags">
+              {post.tags.map((tag) => <span class="recent-tag">{tag}</span>)}
+            </span>
+          </a>
+        ))
+      }
     </div>
   </section>
 </Layout>
@@ -52,7 +147,7 @@ import Layout from '../layouts/Layout.astro';
   .hero {
     position: relative;
     text-align: center;
-    padding: 5rem 0 4rem;
+    padding: 4rem 0 2.25rem;
   }
   .hero::before {
     content: '';
@@ -175,11 +270,31 @@ import Layout from '../layouts/Layout.astro';
     color: var(--text-secondary);
   }
 
+  .section-heading {
+    text-align: center;
+    padding: 0.5rem 0 0;
+  }
+  .section-kicker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+  }
+  .section-heading h2 {
+    margin: 0.4rem 0 0.3rem;
+    font-size: 1.5rem;
+  }
+  .section-heading p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+  }
+
   .features {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 1.5rem;
-    padding: 2rem 0 4rem;
+    padding: 2rem 0 1.5rem;
   }
 
   @media (min-width: 1100px) {
@@ -191,6 +306,9 @@ import Layout from '../layouts/Layout.astro';
 
   .feature-card {
     position: relative;
+    display: block;
+    color: inherit;
+    text-decoration: none;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-left: 3px solid var(--text-secondary);
@@ -213,26 +331,139 @@ import Layout from '../layouts/Layout.astro';
     margin-bottom: 0.8rem;
   }
 
-  .feature-icon {
-    font-size: 2rem;
-    margin-bottom: 1rem;
-  }
-
   .feature-card h3 {
-    margin-top: 0;
+    margin: 0 0 0.5rem;
     font-size: 1.1rem;
-    margin-bottom: 0.5rem;
+    transition: color 0.2s;
+  }
+  .feature-card:hover h3 {
+    color: var(--accent-2);
   }
 
   .feature-card p {
     color: var(--text-secondary);
     font-size: 0.9rem;
+    line-height: 1.6;
     margin-bottom: 1rem;
   }
 
-  .feature-card a {
+  .feature-link {
     font-size: 0.9rem;
     font-weight: 500;
+  }
+
+  .other-series {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.2rem 0 4rem;
+    border-top: 1px solid var(--border);
+  }
+  .other-label {
+    flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .other-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .series-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .series-pill:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+  }
+  .pill-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  .recent-section {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 0 4rem;
+  }
+  .recent-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .recent-head h2 {
+    margin: 0.4rem 0 0;
+    font-size: 1.3rem;
+  }
+  .recent-all {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .recent-all:hover {
+    color: var(--text-primary);
+  }
+  .recent-list {
+    border-top: 1px solid var(--border);
+  }
+  .recent-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.85rem 0.25rem;
+    border-bottom: 1px solid var(--border);
+    color: inherit;
+    text-decoration: none;
+    transition: background 0.2s;
+  }
+  .recent-item:hover {
+    background: var(--bg-secondary);
+  }
+  .recent-date {
+    flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .recent-title {
+    flex: 1;
+    font-size: 0.95rem;
+    transition: color 0.2s;
+  }
+  .recent-item:hover .recent-title {
+    color: var(--accent-2);
+  }
+  .recent-tags {
+    display: flex;
+    gap: 0.4rem;
+    flex-shrink: 0;
+  }
+  .recent-tag {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    padding: 0.1rem 0.45rem;
+    border-radius: 4px;
   }
 
   @media (max-width: 640px) {
@@ -281,6 +512,23 @@ import Layout from '../layouts/Layout.astro';
     }
     .feature-card {
       padding: 1.5rem;
+    }
+    .other-series {
+      flex-direction: column;
+      gap: 0.75rem;
+      padding: 1.2rem 1rem 3rem;
+    }
+    .recent-section {
+      padding: 0 1rem 3rem;
+    }
+    .recent-item {
+      gap: 0.6rem;
+    }
+    .recent-title {
+      font-size: 0.9rem;
+    }
+    .recent-tags {
+      display: none;
     }
   }
 </style>
