@@ -8,6 +8,11 @@ tags:
   - Pooling
   - Autonomous Driving
   - Transformer
+
+series:
+  key: e2e-driving-stack
+  title: "端到端驾驶栈"
+  order: 5
 ---
 
 > 导航线按 1 米一个点取了未来 200 米，每个点绑着位置、朝向、指令，MLP 出来是 (B,200,256)——然后在 200 这个维度上做 max pooling，变成 (B,256) 喂给规划头。这个操作在结构上跟 PointNet 压点云是一回事：对称池化、置换不变，顺序和「在哪」全在池化里被洗掉了。

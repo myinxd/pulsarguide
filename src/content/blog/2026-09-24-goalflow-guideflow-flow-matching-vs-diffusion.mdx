@@ -9,6 +9,11 @@ tags:
   - Diffusion
   - End-to-End
   - Autonomous Driving
+
+series:
+  key: diffusion-on-vehicle
+  title: "扩散模型上车"
+  order: 2
 ---
 
 > [上篇](/blog/posts/2026-09-08-dinov3-features-as-kv-trajectory-query/)拆开了冻结特征的接口，里面顺带讲过 DiffusionDrive 的 anchored Gaussian：扩散解码器的去噪起点不是纯噪声，而是 20 个聚类出来的「常见驾驶模式」锚点附近，配合截断 schedule 把去噪压到 2 步。当时留了个尾巴没说透——**生成式规划器到底能不能一步出轨迹？** 本篇换一条路径来回答：不用扩散，用 Flow Matching。主角是 CVPR 2025 的 GoalFlow，以及它的 2026 后继 GuideFlow。一路看下来你会发现，这两篇和扩散解码器的分歧，表面是「几步推理」，底层是「约束从哪进场」。

@@ -10,6 +10,11 @@ tags:
   - Autonomous Driving
   - Edge Deployment
   - Model Acceleration
+
+series:
+  key: diffusion-on-vehicle
+  title: "扩散模型上车"
+  order: 3
 ---
 
 > [上篇](/blog/posts/2026-09-24-flow-matching-explained/)把 Flow Matching 和扩散的关系讲清楚了：扩散本质是在解一条弯的 ODE，Flow Matching 想办法把路拉直、一步出结果。但有个现实问题那篇没展开——**车端根本等不起那上千步。** 而[更早那篇](/blog/posts/2026-09-24-goalflow-guideflow-flow-matching-vs-diffusion/)提到 DiffusionDrive 时留了个细节：它靠「锚点高斯 + 截断 schedule」把去噪压到 2 步，才让扩散规划器跑到 45 FPS。本篇把这条线补全：先说清 DDPM 为什么慢，再说 DDIM 怎么靠跳步把一千步砍到几十步，最后落到 DiffusionDrive——它如何用「减步数」和「减 decoder」两个杠杆，把扩散模型真正搬上车、塞进板端的实时预算。最后还会和[国产智驾芯片那篇](/blog/posts/2026-09-28-domestic-autonomous-driving-chips-2026/)串一下：算法侧每砍一步，等效需要的 TOPS 就掉一截。
